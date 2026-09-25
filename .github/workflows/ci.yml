@@ -32,7 +32,12 @@ jobs:
         run: cargo build --release --locked --target x86_64-unknown-linux-musl
 
       - name: Build linux/arm64 static
-        run: cargo build --release --locked --target aarch64-unknown-linux-musl
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+          cargo build --release --locked --target aarch64-unknown-linux-musl
+          file target/aarch64-unknown-linux-musl/release/dcheck
 
       - name: Check FreeBSD build
         run: cargo check --locked --target x86_64-unknown-freebsd
