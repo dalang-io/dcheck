@@ -40,7 +40,10 @@ jobs:
           file target/aarch64-unknown-linux-musl/release/dcheck
 
       - name: Check FreeBSD build
-        run: cargo check --locked --target x86_64-unknown-freebsd
+        run: |
+          # rust-toolchain.toml pins the toolchain; add the target to that one
+          rustup target add x86_64-unknown-freebsd
+          cargo check --locked --target x86_64-unknown-freebsd
 
       - name: Verify static ELF
         run: |
