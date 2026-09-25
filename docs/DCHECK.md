@@ -318,9 +318,11 @@ spin retry > 0, SMART FAILED, temperature beyond range.
 ## 13. Build & distribution
 
 ```
-dcheck/Cargo.toml
-scripts/build-dcheck.sh     # repo root
-scripts/release-dcheck.sh
+Cargo.toml
+scripts/build-dcheck.sh     # one target
+scripts/release-dcheck.sh   # all targets, packaged
+scripts/publish-dcheck.sh   # upload the release channel
+scripts/ship-dcheck.sh      # bump, check, publish, tag, push
 ```
 
 - Static release build:
@@ -412,7 +414,7 @@ can verify on real hardware (Fedora SATA + Dell R630 SAS).
   `Home`/`End`/`g`/`G`, `c` copy (OSC52). Text stays selectable (mouse capture
   off by default; `--mouse` opts into wheel scrolling). ✅
 - `dcheck prometheus` metrics. ✅
-- Man page `dcheck/dcheck.1`. ✅
+- Man page `dcheck.1`. ✅
 - Release artifacts: tarballs + `SHA256SUMS`, optional GPG signing via `GPG_KEY`. ✅
 
 ### M12 — RAM & CPU — DONE

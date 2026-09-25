@@ -11,7 +11,7 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DCHECK_DIR="$REPO_DIR/dcheck"
+DCHECK_DIR="$REPO_DIR"
 
 TARGET="${TARGET:-x86_64-unknown-linux-musl}"
 if [ "${1:-}" = "--native" ]; then
@@ -23,7 +23,7 @@ command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo not found in PATH" >&2;
 echo "=== Building dcheck ($TARGET) ==="
 
 # Ensure the rust std for the target is installed (for the toolchain pinned
-# in dcheck/rust-toolchain.toml, hence the cd).
+# in rust-toolchain.toml, hence the cd).
 if ! (cd "$DCHECK_DIR" && rustup target list --installed 2>/dev/null) | grep -qx "$TARGET"; then
     echo "ERROR: rust target '$TARGET' not installed. Run:" >&2
     echo "  rustup target add $TARGET" >&2

@@ -45,7 +45,7 @@ utamanya teknisi server:
 Landing page: <https://wayang.dalang.io/apps/dcheck.html> (juga ada bagian di
 `download.html`).
 
-## 2. Peta kode (`dcheck/src`, ±21.4k baris)
+## 2. Peta kode (`src`, ±21.4k baris)
 
 | File | Isi |
 |---|---|
@@ -98,28 +98,31 @@ Script ini menjalankan semua langkah di bawah secara diam (satu baris per
 langkah, output lengkap di file log): preflight (master, versi lebih baru
 dari LATEST, tag belum ada) → bump versi (Cargo.toml + landing page) →
 test + clippy host/Linux + e2e → **scan diff untuk kredensial / IP publik**
-(repo publik) → commit → `deploy-site.sh` → verifikasi LATEST, landing page
+→ commit → `publish-dcheck.sh` → versi di landing page (repo `wayangos`,
+lihat di bawah) → verifikasi LATEST, landing page
 dan `dcheck update` dari versi sebelumnya (lokal + `--test-host`) → tag +
 push. Kalau gagal, hanya output langkah itu yang ditampilkan.
 
 Langkah manual (kalau perlu):
 
-1. Naikkan `version` di `dcheck/Cargo.toml`. Samakan juga string versi di
-   `landing-page/apps/dcheck.html` (`sed -i '' 's/0\.4\.1/0.4.2/g' …`).
-2. `./scripts/deploy-site.sh`: build 4 target (Linux x86_64/aarch64, macOS
-   arm64/x86_64), upload `v<ver>/`, set `LATEST`, sinkronkan landing page.
-   Hanya landing page: `SKIP_DCHECK=1 ./scripts/deploy-site.sh`.
-3. Verifikasi: `curl -s https://wayang.dalang.io/dcheck/LATEST`, lalu tes
+1. Naikkan `version` di `Cargo.toml`.
+2. `./scripts/publish-dcheck.sh`: build 4 target (Linux x86_64/aarch64, macOS
+   arm64/x86_64), upload `v<ver>/`, set `LATEST`.
+3. Landing page ada di repo **dalang-io/wayangos** (clone di sebelah repo ini,
+   `../wayangos`, atau set `SITE_REPO`): samakan versi di
+   `landing-page/apps/dcheck.html` (`sed -i '' 's/0\.5\.1/0.5.2/g' …`), commit,
+   lalu `./scripts/deploy-site.sh` di repo itu (tidak menyentuh `/dcheck/`).
+4. Verifikasi: `curl -s https://wayang.dalang.io/dcheck/LATEST`, lalu tes
    `dcheck update` dari versi sebelumnya di mesin uji (pakai direktori
    sementara: `DCHECK_INSTALL_DIR=$(mktemp -d)`).
-4. `git tag -a dcheck-vX.Y.Z` lalu push master dan tag. Tag `v0.x` di repo
-   ini milik **WayangOS**; tag dcheck selalu berawalan `dcheck-`.
+5. `git tag -a dcheck-vX.Y.Z` lalu push master dan tag (tag dcheck tetap
+   berawalan `dcheck-`, meneruskan riwayat dari repo wayangos).
 
 ## 4. Jebakan yang sudah pernah kena
 
 - **Rilis immutable.** Cloudflare meng-cache tarball (4 jam per PoP). Jangan
   pernah menimpa versi yang sudah terbit, karena user akan kena checksum
-  mismatch (kasus 0.2.2). Selalu naikkan versi. `deploy-site.sh` menolak
+  mismatch (kasus 0.2.2). Selalu naikkan versi. `publish-dcheck.sh` menolak
   menimpa versi lama (`FORCE_REPUBLISH=1` hanya untuk darurat).
 - **Build aarch64 dengan rustc ≥ 1.98** mengirim flag
   `-Wl,--fix-cortex-a53-843419` yang ditolak zig. Flag ini dibuang di wrapper
@@ -130,7 +133,7 @@ Langkah manual (kalau perlu):
 - **CDB SCSI.** Page control LOG SENSE ada di byte 2, bukan byte 1 (bug lama
   yang membuat semua SAS "unavailable"). Ada unit test untuk susunan CDB;
   jangan diubah tanpa test.
-- **`dcheck/target/debug/dcheck` di Mac dev adalah file lama milik root**
+- **`target/debug/dcheck` di Mac dev adalah file lama milik root**
   (sisa build dengan sudo) dan tidak ditimpa cargo. Untuk tes manual, build
   ke `CARGO_TARGET_DIR` lain.
 - **Tailwind di landing page itu prebuilt** (`assets/tailwind.css`, tanpa
@@ -171,7 +174,7 @@ Langkah manual (kalau perlu):
 ## 5. Infrastruktur rilis (ringkas)
 
 - Situs + kanal rilis: static site `wayang.dalang.io` di host rilis (lihat
-  default `HOST`/`REMOTE_DIR` di `scripts/deploy-site.sh`), disajikan oleh
+  default `HOST`/`REMOTE_DIR` di `scripts/publish-dcheck.sh`), disajikan oleh
   unit systemd `wayang.dalang.io.service` (python `http.server` di
   localhost) di belakang proxy Pingora milik Dalang, lalu Cloudflare.
 - Layout kanal: `/dcheck/install.sh`, `/dcheck/LATEST`,
@@ -236,5 +239,6 @@ minta langsung ke pemilik.
   Indonesia.
 - Fitur yang menulis ke disk: pengaman dulu (lihat `verify` dan
   `undelete`), uji di lab-243, tidak pernah di server produksi.
-- Rilis: naikkan versi, `deploy-site.sh`, cek `LATEST` + `dcheck update` di
+- Rilis: `scripts/ship-dcheck.sh` (atau manual: naikkan versi,
+  `publish-dcheck.sh`, landing page di repo wayangos), cek `LATEST` + `dcheck update` di
   Mac dan lab-243, lalu tag `dcheck-vX.Y.Z` dan push.

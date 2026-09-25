@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DEBUG_BIN="${CARGO_TARGET_DIR:-$REPO_DIR/dcheck/target}/debug/dcheck"
+DEBUG_BIN="${CARGO_TARGET_DIR:-$REPO_DIR/target}/debug/dcheck"
 
 if [ -n "${CREATE_ONLY:-}" ]; then
     FAKE="${DCHECK_FIXTURE_DIR:-/tmp/dcheck-fixture}"
@@ -117,12 +117,12 @@ absent() {
 
 # ---- fixture ready; either print usage or run assertions ----------------
 if [ -n "${CREATE_ONLY:-}" ]; then
-    (cd "$REPO_DIR/dcheck" && cargo build --quiet)
+    (cd "$REPO_DIR" && cargo build --quiet)
     cat <<EOF
 Fixture created at: $FAKE
 
 Try it manually:
-  (cd "$REPO_DIR/dcheck" && cargo build)
+  (cd "$REPO_DIR" && cargo build)
   DCHECK_SYS_ROOT=$FAKE $DEBUG_BIN                       # interactive menu
   DCHECK_SYS_ROOT=$FAKE $DEBUG_BIN storage               # device list + picker
   DCHECK_SYS_ROOT=$FAKE $DEBUG_BIN storage /dev/nvme0n1  # one device report
@@ -134,7 +134,7 @@ fi
 if [ -n "${DCHECK_BIN:-}" ]; then
     BIN="$DCHECK_BIN"
 else
-    (cd "$REPO_DIR/dcheck" && cargo build --quiet)
+    (cd "$REPO_DIR" && cargo build --quiet)
     BIN="$DEBUG_BIN"
 fi
 [ -x "$BIN" ] || { echo "ERROR: dcheck binary not found: $BIN" >&2; exit 1; }
@@ -190,7 +190,7 @@ contains "$REP2" "/"                     "mountpoint joined"
 
 echo
 echo "=== dcheck storage /dev/sda with SMART (sample JSON) ==="
-SMART_JSON="$REPO_DIR/dcheck/testdata/smart-sata-sample.json"
+SMART_JSON="$REPO_DIR/testdata/smart-sata-sample.json"
 REP3="$(DCHECK_SMART_JSON="$SMART_JSON" "$BIN" storage /dev/sda 2>&1 || true)"
 printf '%s\n' "$REP3"
 echo

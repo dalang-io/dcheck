@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DCHECK_DIR="$REPO_DIR/dcheck"
+DCHECK_DIR="$REPO_DIR"
 OUT_DIR="${OUT_DIR:-$REPO_DIR/dist}"
 TARGETS="${TARGETS:-x86_64-unknown-linux-musl aarch64-unknown-linux-musl}"
 # macOS binaries can only be linked on a Mac.

@@ -8,14 +8,16 @@
 #
 # Steps:
 #   1. preflight   branch master, version newer than the published LATEST
-#   2. bump        dcheck/Cargo.toml (+ Cargo.lock) and the landing page
+#   2. bump        Cargo.toml (+ Cargo.lock)
 #   3. checks      cargo test, clippy (host + x86_64 Linux), e2e fixtures
-#   4. scan        the diff for credentials / public IPs (public repo!)
-#   5. commit      dcheck/ landing-page/ docs/ scripts/ with -m MESSAGE
-#   6. deploy      scripts/deploy-site.sh (4 targets, upload, LATEST, site)
-#   7. verify      LATEST + landing page online, `dcheck update` from the
+#   4. scan        the diff for credentials / public IPs
+#   5. commit      with -m MESSAGE
+#   6. publish     scripts/publish-dcheck.sh (4 targets, upload, LATEST)
+#   7. site        version on the landing page (apps/dcheck.html) in the
+#                  wayangos repo at SITE_REPO: bump, commit, deploy-site.sh
+#   8. verify      LATEST (+ landing page) online, `dcheck update` from the
 #                  previous version locally and on each --test-host
-#   8. tag + push  dcheck-vX.Y.Z, master and the tag
+#   9. tag + push  dcheck-vX.Y.Z, master and the tag (+ the site repo)
 #
 # Options:
 #   -m, --message MSG   commit message (required unless --dry-run)
@@ -25,11 +27,15 @@
 #   --skip-checks       skip step 3 (only when the same tree was just tested)
 #   --allow-ip          do not stop on public IPv4 addresses in the diff
 #
-# Env: HOST / REMOTE_DIR are passed to deploy-site.sh. SHIP_LOG sets the log
-# file (default: a temp file, printed at the end).
+# Env: HOST / REMOTE_DIR are passed to the publish/deploy scripts. SITE_REPO is
+# the wayangos checkout with the landing page (default: ../wayangos; skipped
+# with a warning when missing). SHIP_LOG sets the log file (default: a temp
+# file, printed at the end).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SITE_REPO="${SITE_REPO:-$ROOT/../wayangos}"
+SITE_PAGE="landing-page/apps/dcheck.html"
 SITE="https://wayang.dalang.io"
 VERSION=""
 MESSAGE=""
@@ -38,7 +44,7 @@ SKIP_CHECKS=0
 ALLOW_IP=0
 TEST_HOSTS=()
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -64,7 +70,8 @@ START=$(date +%s)
 # step NAME CMD… — run quietly, one status line, stop with the log tail on failure.
 step() {
     local name="$1"; shift
-    local t0=$(date +%s)
+    local t0
+    t0=$(date +%s)
     printf '  %-10s ' "$name"
     echo "===== $name: $*" >> "$LOG"
     if "$@" >> "$LOG" 2>&1; then
@@ -82,8 +89,8 @@ newer() { # $1 > $2 (semver)
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
 }
 
-cd "$ROOT"
-CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' dcheck/Cargo.toml | head -1)
+cd "$ROOT" || exit 1
+CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 PUBLISHED=$(curl -fsS --max-time 10 "$SITE/dcheck/LATEST" 2>/dev/null || echo "0.0.0")
 echo "dcheck ship: $CURRENT → $VERSION (published: $PUBLISHED)$([ "$DRY" = 1 ] && echo ', dry run')"
 
@@ -97,27 +104,25 @@ step preflight preflight
 
 bump() {
     if [ "$CURRENT" != "$VERSION" ]; then
-        sed -i.bak "s/^version = \"$CURRENT\"/version = \"$VERSION\"/" dcheck/Cargo.toml && rm -f dcheck/Cargo.toml.bak
-        local re="${CURRENT//./\\.}"
-        sed -i.bak "s/$re/$VERSION/g" landing-page/apps/dcheck.html && rm -f landing-page/apps/dcheck.html.bak
+        sed -i.bak "s/^version = \"$CURRENT\"/version = \"$VERSION\"/" Cargo.toml && rm -f Cargo.toml.bak
     fi
-    (cd dcheck && cargo metadata --format-version 1 >/dev/null) # refreshes Cargo.lock
-    grep -q "version = \"$VERSION\"" dcheck/Cargo.toml
+    cargo metadata --format-version 1 >/dev/null # refreshes Cargo.lock
+    grep -q "version = \"$VERSION\"" Cargo.toml
 }
 [ "$DRY" = 1 ] || step bump bump
 
 if [ "$SKIP_CHECKS" = 0 ]; then
-    step test bash -c 'cd dcheck && cargo test --quiet'
-    step clippy bash -c 'cd dcheck && cargo clippy --all-targets -- -D warnings'
-    step clippy-lx bash -c 'cd dcheck && cargo clippy --target x86_64-unknown-linux-musl --all-targets -- -D warnings'
+    step test cargo test --quiet
+    step clippy cargo clippy --all-targets -- -D warnings
+    step clippy-lx cargo clippy --target x86_64-unknown-linux-musl --all-targets -- -D warnings
     step e2e ./scripts/test-dcheck.sh
 fi
 
 scan() {
-    # Added lines only, in the parts of the repo a release touches.
+    # Added lines only.
     local diff new
     # (This script is skipped: it contains the patterns it looks for.)
-    local paths=(dcheck landing-page docs scripts ':!scripts/ship-dcheck.sh')
+    local paths=(. ':!scripts/ship-dcheck.sh')
     diff=$(git diff HEAD -- "${paths[@]}" | grep '^+' | grep -v '^+++')
     # New files are not in `git diff`: scan them whole.
     new=$(git ls-files --others --exclude-standard -- "${paths[@]}")
@@ -142,8 +147,24 @@ if [ "$DRY" = 1 ]; then
     exit 0
 fi
 
-step commit bash -c 'git add -A dcheck landing-page docs scripts && { git diff --cached --quiet || git commit -q -F -; }' <<< "$MESSAGE"
-step deploy ./scripts/deploy-site.sh
+step commit bash -c 'git add -A && { git diff --cached --quiet || git commit -q -F -; }' <<< "$MESSAGE"
+step publish ./scripts/publish-dcheck.sh
+
+# The landing page lives in the wayangos repo: bump the version shown there.
+SITE_OK=0
+site() {
+    local re="${PUBLISHED//./\\.}"
+    sed -i.bak "s/$re/$VERSION/g" "$SITE_REPO/$SITE_PAGE" && rm -f "$SITE_REPO/$SITE_PAGE.bak"
+    grep -q "$VERSION" "$SITE_REPO/$SITE_PAGE"
+    git -C "$SITE_REPO" add "$SITE_PAGE"
+    git -C "$SITE_REPO" diff --cached --quiet || git -C "$SITE_REPO" commit -q -m "chore(site): dcheck $VERSION"
+    "$SITE_REPO/scripts/deploy-site.sh"
+}
+if [ -f "$SITE_REPO/$SITE_PAGE" ]; then
+    step site site && SITE_OK=1
+else
+    echo "  site       skipped — no $SITE_PAGE under SITE_REPO=$SITE_REPO"
+fi
 
 verify() {
     local ok=0
@@ -152,7 +173,9 @@ verify() {
         sleep 5
     done
     [ "$ok" = 1 ] || { echo "LATEST is not $VERSION"; return 1; }
-    curl -fsS "$SITE/apps/dcheck.html?$RANDOM" | grep -q "v$VERSION" || { echo "landing page does not show v$VERSION"; return 1; }
+    if [ "$SITE_OK" = 1 ]; then
+        curl -fsS "$SITE/apps/dcheck.html?$RANDOM" | grep -q "v$VERSION" || { echo "landing page does not show v$VERSION"; return 1; }
+    fi
     # Self-update from the previous release (temp dir; nothing installed).
     local t; t=$(mktemp -d)
     curl -fsSL "$SITE/dcheck/install.sh" | DCHECK_VERSION="$PUBLISHED" DCHECK_INSTALL_DIR="$t" sh
@@ -169,5 +192,6 @@ done
 
 step tag git tag -a "dcheck-v$VERSION" -m "dcheck $VERSION"
 step push bash -c "git push -q origin master && git push -q origin dcheck-v$VERSION"
+[ "$SITE_OK" = 0 ] || step push-site git -C "$SITE_REPO" push -q origin master
 
 echo "shipped dcheck $VERSION in $(( $(date +%s) - START ))s — log: $LOG"

@@ -40,7 +40,7 @@ SAT), `dmidecode` (RAM modules; SMBIOS is also read from sysfs), `curl` for
 `watch --webhook`.
 
 `DCHECK_INSTALL_DIR` (default `/usr/local/bin`) and `DCHECK_VERSION` override
-the defaults. Releases are published with `scripts/deploy-site.sh`.
+the defaults. Releases are published with `scripts/ship-dcheck.sh` (or `scripts/publish-dcheck.sh` for the channel only).
 
 ## Usage
 
@@ -353,4 +353,4 @@ GPG_KEY=0x... ./scripts/release-dcheck.sh # also GPG-sign SHA256SUMS
                                           # deploy, verify update, tag, push
 ```
 
-Man page: `dcheck/dcheck.1`.
+Man page: `dcheck.1`.
