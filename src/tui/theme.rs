@@ -238,6 +238,12 @@ const ASCII_BORDER: border::Set = border::Set {
     horizontal_bottom: "-",
 };
 
+/// Running on the Linux kernel console (TERM=linux, e.g. WayangOS's tty).
+fn kernel_console() -> bool {
+    static CONSOLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CONSOLE.get_or_init(|| std::env::var("TERM").is_ok_and(|t| t == "linux"))
+}
+
 const SPIN_FANCY: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPIN_PLAIN: [&str; 4] = ["|", "/", "-", "\\"];
 
@@ -294,7 +300,9 @@ impl Ui {
 
     /// Filled / empty gauge cells.
     pub fn gauge_cells(self, mono: bool) -> (&'static str, &'static str) {
-        match (self.plain, mono) {
+        // The kernel console font has no `━`: it falls back to `-` for both
+        // cells and the gauge loses its filled/empty contrast. Blocks it has.
+        match (self.plain, mono || kernel_console()) {
             (true, _) => ("#", "."),
             (false, false) => ("━", "─"),
             (false, true) => ("█", "░"),

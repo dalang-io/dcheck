@@ -1,8 +1,71 @@
 # dcheck
 
-Device health check — inspect storage (HDD/SSD/NVMe) identity, capacity, health
-and estimated remaining life. Terminal UI, single static binary, no mandatory
-external tools.
+**Is this drive dying, fake, or still recoverable? Find out in seconds — one
+static binary, no dependencies, straight from the terminal.**
+
+dcheck reads SMART natively (ATA, NVMe, SCSI/SAS — even behind RAID and USB
+bridges), estimates how much life a drive has left, catches counterfeit flash
+drives, tells you whether deleted data can still be saved, and checks the rest
+of the machine: RAM, CPU, motherboard, fans, power supplies and the BMC log.
+It runs on any Linux box from a rescue USB to a rack server, plus FreeBSD and
+macOS.
+
+```bash
+curl -fsSL https://wayang.dalang.io/dcheck/install.sh | sh
+sudo dcheck
+```
+
+![dcheck command deck](docs/screenshots/command-deck.png)
+
+### Know which drive to replace — before it fails
+
+A verdict you can act on (**OK**, **MONITOR**, **BACK UP NOW**, **REPLACE**),
+life left in years, temperature, endurance used and every alert that led there.
+
+![Failing HDD: back up now](docs/screenshots/report-failing-hdd.png)
+
+![Healthy NVMe: wear, endurance and life left](docs/screenshots/report-nvme.png)
+
+### Every drive in the box, mounted or not
+
+NVMe, SATA SSD/HDD, SAS, USB, SD/eMMC and virtual disks in one list, with
+partitions, filesystems and usage.
+
+![Storage array](docs/screenshots/storage-array.png)
+
+### Catch fake-capacity flash drives
+
+A "256 GB" stick that really stores 32 GB silently eats your data. The
+capacity test writes verifiable blocks, reads them back and shows the real
+size.
+
+![Counterfeit flash drive detected](docs/screenshots/fake-flash-drive.png)
+
+### Deleted something? Know your chances first
+
+A read-only disk map of what is still on the drive, whether TRIM already
+erased it, and the exact recovery steps for that filesystem — plus undelete
+for NTFS, FAT32 and exFAT.
+
+![Recovery triage](docs/screenshots/recovery.png)
+
+### Servers too: board, BMC, fans and power
+
+Motherboard and firmware, sensors, IPMI event log, PCIe link widths and
+failed power supplies — natively, without `ipmitool`.
+
+![Server motherboard with a failed PSU](docs/screenshots/server-motherboard.png)
+
+### Built for automation
+
+`--json` everywhere, `dcheck check` as a health gate (exit code = worst
+verdict), `dcheck watch` with webhook alerts, and `dcheck prometheus` for
+scrapers.
+
+<sub>Screenshots: dcheck on the WayangOS console in a VM, using its built-in
+sample devices (`dcheck demo`).</sub>
+
+---
 
 > Status: **M1–M13** — storage (enumeration; native SMART ATA/NVMe/SCSI; ATA
 > attributes+thresholds; self-test + read-only bench; link speed), RAM (usage,
@@ -12,7 +75,7 @@ external tools.
 > meters, terminal UI, `--json`,
 > `prometheus`, monitoring/alerts, `smartctl` enrichment, TBW overrides, and a
 > FreeBSD/macOS backend.
-> Full plan: [`../docs/DCHECK.md`](../docs/DCHECK.md).
+> Full plan: [`docs/DCHECK.md`](docs/DCHECK.md). License: [MIT](LICENSE).
 
 ## Install
 
