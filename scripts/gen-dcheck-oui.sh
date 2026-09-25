@@ -14,7 +14,10 @@ if [ -z "$SRC" ]; then
         [ -f "$f" ] && SRC="$f" && break
     done
 fi
-[ -n "$SRC" ] && [ -f "$SRC" ] || { echo "usage: $0 path/to/oui.txt" >&2; exit 1; }
+if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
+    echo "usage: $0 path/to/oui.txt" >&2
+    exit 1
+fi
 
 OUT="$(cd "$(dirname "$0")/.." && pwd)/src/oui_table.rs"
 {

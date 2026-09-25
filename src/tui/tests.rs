@@ -349,6 +349,7 @@ fn recover_screen_shows_chance_steps_and_map() {
 
 #[test]
 fn verify_flow_plan_run_result() {
+    let _serial = crate::verify::test_lock();
     // Demo row 3 is the USB "Flash Disk", simulated as a counterfeit stick;
     // row 1 (SATA SSD) as a genuine drive.
     for (row, code, expect) in [(3usize, 3, "Real size"), (1, 0, "PASS")] {
@@ -381,6 +382,7 @@ fn verify_flow_plan_run_result() {
 
 #[test]
 fn verify_can_be_stopped_and_refuses_dead_ports() {
+    let _serial = crate::verify::test_lock();
     let mut a = app(neon(), false);
     a.screen = Screen::Storage;
     a.table.select(Some(1));

@@ -37,6 +37,16 @@ const MAGIC: &[u8; 8] = b"DCHKVRFY";
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
+/// Tests that run the capacity test share `STOP`; cargo runs tests in
+/// parallel, so they take this lock to not cancel each other.
+#[cfg(test)]
+pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Fill one block with its header and pattern.
 pub fn fill_block(buf: &mut [u8], seed: u64, index: u64) {
     buf[..8].copy_from_slice(MAGIC);
@@ -1066,6 +1076,7 @@ mod tests {
     }
 
     fn run_quiet(t: &mut SimTarget, total: u64) -> Outcome {
+        let _serial = test_lock();
         run(t, total, 1, &mut |_, _, _| {})
     }
 
