@@ -96,7 +96,8 @@ when the drive holds data. On a system disk the free-space mode needs
 .B \-\-size
 or
 .BR \-\-full .
-Exit status 0 pass, 3 bad data, 1 error or aborted.
+Exit status 0 pass, 3 bad data, 1 error or aborted. Linux and macOS (macOS:
+free-space mode only; the disk map and raw destructive mode are Linux-only).
 .TP
 .BI "recover " "disk|partition|path" " \fR[\fB\-\-no-map\fR] [\fB\-\-cells\fR \fIN\fR]"
 Read-only. Estimates whether deleted files can still be recovered (HDD vs
@@ -104,13 +105,15 @@ SSD with TRIM, discard mount option, fstrim.timer, filesystem, fullness),
 prints the steps (stop writing, image with ddrescue, the right recovery tool
 on the image) and, as root, a sampled map of where the disk still holds data.
 .TP
-.BI "undelete " "device|partition|image" " \fR[\fB\-\-to\fR \fIDIR\fR] [\fB\-\-match\fR \fIPATTERN\fR] [\fB\-\-include-overwritten\fR] [\fB\-\-carve\fR]"
+.BI "undelete " "device|partition|image" " \fR[\fB\-\-to\fR \fIDIR\fR] [\fB\-\-match\fR \fIPATTERN\fR] [\fB\-\-include-overwritten\fR] [\fB\-\-carve\fR [\fB\-\-free\fR]]"
 Lists deleted files on NTFS, FAT32 and exFAT (names kept) and recovers them
 into
 .IR DIR ,
 which must be on another disk. The source is only read. Other filesystems:
 .B \-\-carve
-recovers JPEG, PNG, PDF and ZIP/Office files by their signatures.
+recovers JPEG, PNG, PDF and ZIP/Office files by their signatures;
+.B \-\-free
+limits carving to the free clusters of NTFS/FAT32/exFAT.
 .TP
 .BR board " [" \-\-json "]"
 Motherboard: system / board / chassis identity (DMI), BIOS version, date and

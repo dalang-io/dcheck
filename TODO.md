@@ -537,8 +537,13 @@ Tugas:
       /home, …) ditolak tanpa `--size` atau `--full`. Diuji di lab-243:
       loop ext4 → mengetik nama saja ditolak, file tetap utuh; `ERASE
       loop0` → jalan, PASS; `/dev/sda` tanpa `--size` ditolak.
-- Belum: macOS (`F_NOCACHE`, /dev/rdiskN), baca/cek paralel (sekarang I/O
-  dan cek pola bergantian, ±470 MB/s batas CPU per thread).
+- [x] macOS: mode free space (`diskutil`/`df`, `fcntl(F_NOCACHE)` untuk
+      membuang cache baca, `--dir`/`--size`/`--yes`); `--destructive` tetap
+      Linux-only (flush block device lewat ioctl Linux) dan ditolak dengan
+      pesan yang jelas. Uji nyata di Mac: `verify disk0 --size 1M --dir …`
+      → PASS, file uji terhapus.
+- Belum: FreeBSD; baca/cek paralel (sekarang I/O dan cek pola bergantian,
+  ±470 MB/s batas CPU per thread); `--destructive` di macOS.
 
 ## O. File terhapus: bisa di-restore? (riset, belum dikerjakan)
 
@@ -623,7 +628,9 @@ Dikerjakan (poin 1 + 2), `dcheck recover <disk|partisi|path>`, read-only:
   dikembalikan ke default di main); partisi BIOS-boot kecil tanpa
   filesystem dilewati.
 - Catatan: tbw.json override di lab-243 sudah dihapus (2026-09-24).
-- Belum: poin 3 (undelete sungguhan), TUI, macOS.
+- Poin 3 (undelete sungguhan) dan TUI dikerjakan di Q/P. macOS: penilaian +
+  langkah jalan (`mount`/`df`/`diskutil`, model APFS auto-TRIM); peta disk
+  sampling tetap Linux-only (butuh lapisan block device Linux).
 
 ## P. TUI: layar RECOVERY dan VERIFY
 
@@ -721,9 +728,26 @@ Tugas:
   terpakai / kosong / terhapus utuh / terhapus tertimpa / ditandai /
   dipilih; lokasi file terpilih ditampilkan. `space`/`a` tandai, `w` →
   prompt folder tujuan (dicek beda disk), hasil dalam popup.
-- Belum: exFAT/FAT32 terfragmentasi (diasumsikan berurutan), NTFS
-  $ATTRIBUTE_LIST (file sangat terfragmentasi), nama file NTFS dari index
-  slack direktori (untuk kasus ntfs3), carving di free space saja, macOS.
+- [x] NTFS `$ATTRIBUTE_LIST`: petakan extent `$DATA` (dan `$FILE_NAME`) dari
+      record ekstensi yang dirujuk list; tiap extent didekode sendiri (LCN
+      pertama absolut, sesuai ntfs3 `run_unpack`), lalu digabung urut VCN.
+      Fixture asli (ntfs/ntfs3) tetap 4/4 dan 3/3 utuh; unit test sintetis
+      untuk list + record ekstensi.
+- [x] Nama file NTFS untuk kasus ntfs3: baca `$INDEX_ROOT` (`$I30`) dan
+      blok `$INDEX_ALLOCATION` (fixup `INDX`), petakan record MFT → nama dari
+      entri `$FILE_NAME` yang masih tertinggal; dipakai hanya bila record
+      terhapus tidak punya nama, kalau tidak tetap `$NoName/record-N`. Unit
+      test untuk kedua parser indeks.
+- [x] `--carve --free`: carving hanya di cluster bebas (NTFS `$Bitmap`,
+      FAT32, exFAT bitmap), jadi file hidup tidak ikut di-carve; filesystem
+      lain tetap whole-volume. Unit test: range bebas tidak menyentuh cluster
+      terpakai dan JPEG di ruang terpakai tidak ikut.
+- [x] Asumsi kontigu FAT32/exFAT didokumentasikan ("assumed contiguous") di
+      doc modul + README; `NoFatChain` exFAT dihormati.
+- [x] `check_destination` (tujuan wajib di disk lain) juga jalan di macOS
+      (`disk_name`/`mount_source` versi `diskutil`/`mount`).
+- Belum: exFAT/FAT32 terfragmentasi (tetap diasumsikan berurutan — sifat
+  data dihapus, bukan bug), TUI untuk `--free`, macOS `--carve` dari TUI.
 
 ## R. Kecepatan uji kapasitas dalam Mbps
 

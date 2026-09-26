@@ -5,17 +5,29 @@
 //!
 //! - NTFS: a deleted file's MFT record keeps its name, parent folder, size
 //!   and data runs (fragmented files too) until the record is reused; small
-//!   files live inside the record itself. Windows and ntfs-3g keep the name;
-//!   the Linux ntfs3 driver removes it, then the file is recovered as
-//!   `$NoName/record-N.<type from its contents>`.
+//!   files live inside the record itself. When a file is so fragmented that
+//!   its runs no longer fit in one record, the base record points at
+//!   extension records through `$ATTRIBUTE_LIST`; those are followed too, and
+//!   the runlist of every extent is decoded on its own (each extent's first
+//!   LCN is absolute). Windows and ntfs-3g keep the name; the Linux ntfs3
+//!   driver removes it from the MFT record, so the name is looked for in the
+//!   directory index (`$I30`) slack, and only when that fails is the file
+//!   recovered as `$NoName/record-N.<type from its contents>`.
 //! - FAT32: the first byte of the name becomes 0xE5 and the cluster chain is
-//!   cleared, but the long name, size and first cluster remain; the data is
-//!   assumed to be contiguous (true for most unfragmented files).
+//!   cleared, but the long name, size and first cluster remain. **The data is
+//!   assumed to be contiguous** from the first cluster: correct for the vast
+//!   majority of unfragmented files, wrong for a fragmented one (its tail is
+//!   then taken from whatever clusters follow). Such files are marked
+//!   "assumed contiguous".
 //! - exFAT: the InUse bit is cleared; name, size, first cluster and the
-//!   "contiguous" flag remain.
+//!   NoFatChain ("contiguous") flag remain. A file that was fragmented has
+//!   NoFatChain clear and its FAT chain is gone, so it too falls back to the
+//!   same contiguous assumption (with the same note).
 //! - Anything else (ext4, XFS, btrfs …): the block map is gone, so
 //!   `--carve` searches the raw device for JPEG / PNG / PDF / ZIP (Office)
-//!   files instead. Names are lost.
+//!   files instead. Names are lost. `--carve --free` restricts the search to
+//!   the free clusters of a filesystem whose bitmap is known (NTFS / FAT32 /
+//!   exFAT), so live files are not carved again.
 //!
 //! Every file gets a state from the allocation table / bitmap: its clusters
 //! are still free (INTACT), some are in use again (PARTLY REUSED), or all of
@@ -557,23 +569,7 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
 
 /// Apply the update sequence array of an MFT record (in place).
 pub fn ntfs_fixup(rec: &mut [u8]) -> bool {
-    if rec.len() < 48 || &rec[..4] != b"FILE" {
-        return false;
-    }
-    let (uo, un) = (u16le(rec, 4) as usize, u16le(rec, 6) as usize);
-    if uo + 2 * un > rec.len() {
-        return false;
-    }
-    let usn = [rec[uo], rec[uo + 1]];
-    for i in 1..un {
-        let p = i * 512 - 2;
-        if p + 2 > rec.len() || rec[p..p + 2] != usn {
-            return false;
-        }
-        rec[p] = rec[uo + 2 * i];
-        rec[p + 1] = rec[uo + 2 * i + 1];
-    }
-    true
+    fixup(rec, b"FILE")
 }
 
 /// Data runs: (LCN or None for sparse, cluster count).
@@ -609,22 +605,74 @@ pub fn ntfs_runs(rl: &[u8]) -> Vec<(Option<i64>, u64)> {
     out
 }
 
-/// Data runs (LCN or sparse, cluster count) and the real size.
-type Runs = (Vec<(Option<i64>, u64)>, u64);
+/// One attribute of an MFT record, as far as undelete needs it.
+#[derive(Debug, Clone)]
+struct NtfsAttr {
+    type_: u32,
+    /// The attribute has a name (e.g. `$I30`); unnamed `$DATA`/`$FILE_NAME` do not.
+    named: bool,
+    /// Lowest VCN of a non-resident attribute (0 for its first extent).
+    vcn: u64,
+    /// Real data size; only the first extent carries it.
+    size: u64,
+    /// Resident value bytes.
+    resident: Option<Vec<u8>>,
+    /// Raw mapping-pairs runlist of a non-resident attribute.
+    runs: Option<Vec<u8>>,
+}
+
+/// One entry of a record's `$ATTRIBUTE_LIST`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AttrRef {
+    type_: u32,
+    #[allow(dead_code)]
+    id: u16,
+    named: bool,
+    /// MFT record number holding this attribute extent.
+    record: u64,
+    vcn: u64,
+}
 
 struct NtfsRecord {
     in_use: bool,
     is_dir: bool,
-    name: Option<(u64, String)>,
-    /// Unnamed $DATA: resident bytes, or (runs, real size).
-    data: Option<Result<Vec<u8>, Runs>>,
+    attrs: Vec<NtfsAttr>,
+}
+
+impl NtfsRecord {
+    /// Best `$FILE_NAME` value: (parent record, name). The Win32 namespace is
+    /// preferred over the 8.3 DOS one.
+    fn name(&self) -> Option<(u64, String)> {
+        let mut best: Option<(u8, u64, String)> = None;
+        for a in &self.attrs {
+            if a.type_ != 0x30 {
+                continue;
+            }
+            let Some(c) = &a.resident else { continue };
+            if c.len() < 66 {
+                continue;
+            }
+            let (n, ns) = (c[64] as usize, c[65]);
+            if 66 + 2 * n > c.len() {
+                continue;
+            }
+            let rank = if ns == 2 { 3 } else { ns };
+            if best.as_ref().is_none_or(|(r, _, _)| rank < *r) {
+                best = Some((rank, u64le(c, 0) & 0x0000_FFFF_FFFF_FFFF, utf16(&c[66..66 + 2 * n])));
+            }
+        }
+        best.map(|(_, p, n)| (p, n))
+    }
+
+    fn has_data(&self) -> bool {
+        self.attrs.iter().any(|a| a.type_ == 0x80 && !a.named)
+    }
 }
 
 fn ntfs_record(rec: &[u8]) -> NtfsRecord {
     let flags = u16le(rec, 22);
-    let mut r = NtfsRecord { in_use: flags & 1 != 0, is_dir: flags & 2 != 0, name: None, data: None };
+    let mut r = NtfsRecord { in_use: flags & 1 != 0, is_dir: flags & 2 != 0, attrs: Vec::new() };
     let mut off = u16le(rec, 20) as usize;
-    let mut best_ns = 99u8;
     while off + 16 <= rec.len() {
         let t = u32le(rec, off);
         let len = u32le(rec, off + 4) as usize;
@@ -634,37 +682,244 @@ fn ntfs_record(rec: &[u8]) -> NtfsRecord {
         let a = &rec[off..off + len];
         let nonres = a[8] != 0;
         let named = a[9] != 0;
-        match (t, nonres) {
-            (0x30, false) => {
-                let (co, cl) = (u16le(a, 20) as usize, u32le(a, 16) as usize);
-                if co + cl <= a.len() && cl >= 66 {
-                    let c = &a[co..co + cl];
-                    let (n, ns) = (c[64] as usize, c[65]);
-                    // Prefer the Win32 name over the 8.3 DOS one.
-                    let rank = if ns == 2 { 3 } else { ns };
-                    if rank < best_ns && 66 + 2 * n <= c.len() {
-                        best_ns = rank;
-                        r.name = Some((u64le(c, 0) & 0x0000_FFFF_FFFF_FFFF, utf16(&c[66..66 + 2 * n])));
-                    }
-                }
+        let mut attr = NtfsAttr { type_: t, named, vcn: 0, size: 0, resident: None, runs: None };
+        if nonres {
+            attr.vcn = u64le(a, 16);
+            attr.size = u64le(a, 48);
+            let ro = u16le(a, 32) as usize;
+            if ro < a.len() {
+                attr.runs = Some(a[ro..].to_vec());
             }
-            (0x80, false) if !named => {
-                let (co, cl) = (u16le(a, 20) as usize, u32le(a, 16) as usize);
-                if co + cl <= a.len() {
-                    r.data = Some(Ok(a[co..co + cl].to_vec()));
-                }
+        } else {
+            let (co, cl) = (u16le(a, 20) as usize, u32le(a, 16) as usize);
+            if co + cl <= a.len() {
+                attr.resident = Some(a[co..co + cl].to_vec());
             }
-            (0x80, true) if !named && u64le(a, 16) == 0 => {
-                let ro = u16le(a, 32) as usize;
-                if ro < a.len() {
-                    r.data = Some(Err((ntfs_runs(&a[ro..]), u64le(a, 48))));
-                }
-            }
-            _ => {}
         }
+        r.attrs.push(attr);
         off += len;
     }
     r
+}
+
+/// Parse the entries of a `$ATTRIBUTE_LIST` value.
+fn attr_list_entries(b: &[u8]) -> Vec<AttrRef> {
+    let mut v = Vec::new();
+    let mut off = 0usize;
+    while off + 26 <= b.len() {
+        let t = u32le(b, off);
+        if t == 0xFFFF_FFFF {
+            break;
+        }
+        let len = u16le(b, off + 4) as usize;
+        if len < 26 || off + len > b.len() {
+            break;
+        }
+        v.push(AttrRef {
+            type_: t,
+            id: u16le(b, off + 24),
+            named: b[off + 6] != 0,
+            record: u64le(b, off + 16) & 0x0000_FFFF_FFFF_FFFF,
+            vcn: u64le(b, off + 8),
+        });
+        off += len;
+    }
+    v
+}
+
+/// Read the clusters of a decoded runlist into a buffer of at most `size` bytes.
+fn read_runs(src: &dyn Source, runs: &[(Option<i64>, u64)], size: u64, lcn_off: &dyn Fn(i64) -> u64, cs: u64) -> Vec<u8> {
+    let mut v = Vec::new();
+    for (l, c) in runs {
+        match l {
+            Some(l) => v.extend(read(src, lcn_off(*l), (*c * cs) as usize).unwrap_or_default()),
+            None => v.extend(vec![0u8; (*c * cs) as usize]),
+        }
+    }
+    v.truncate(size as usize);
+    v
+}
+
+/// `$ATTRIBUTE_LIST` entries of a record, reading the list from disk when it is
+/// itself non-resident.
+fn record_attr_list(recs: &HashMap<u64, NtfsRecord>, i: u64, src: &dyn Source, lcn_off: &dyn Fn(i64) -> u64, cs: u64) -> Vec<AttrRef> {
+    let Some(r) = recs.get(&i) else { return Vec::new() };
+    let mut v = Vec::new();
+    for a in &r.attrs {
+        if a.type_ != 0x20 {
+            continue;
+        }
+        if let Some(b) = &a.resident {
+            v.extend(attr_list_entries(b));
+        } else if let Some(raw) = &a.runs {
+            let bytes = read_runs(src, &ntfs_runs(raw), a.size, lcn_off, cs);
+            v.extend(attr_list_entries(&bytes));
+        }
+    }
+    v
+}
+
+/// A resolved attribute value: resident bytes, or a runlist plus its real size.
+#[derive(Debug)]
+enum Resolved {
+    Resident(Vec<u8>),
+    Runs(Vec<(Option<i64>, u64)>, u64),
+}
+
+/// Gather the extents of an attribute from the base record and the extension
+/// records named in its `$ATTRIBUTE_LIST`, and merge them in VCN order.
+///
+/// Every extent's runlist is decoded on its own: each one starts with an
+/// absolute LCN (the first mapping-pair offset is relative to 0), so no
+/// correction between extents is needed.
+fn resolve_attr(recs: &HashMap<u64, NtfsRecord>, list: &[AttrRef], base: u64, type_: u32, unnamed: bool) -> Option<Resolved> {
+    let mut segs: Vec<(u64, NtfsAttr)> = Vec::new();
+    let mut collect = |rec: Option<&NtfsRecord>| {
+        if let Some(r) = rec {
+            for a in &r.attrs {
+                if a.type_ == type_ && (!unnamed || !a.named) {
+                    segs.push((a.vcn, a.clone()));
+                }
+            }
+        }
+    };
+    collect(recs.get(&base));
+    for e in list {
+        if e.type_ == type_ && (!unnamed || !e.named) {
+            collect(recs.get(&e.record));
+        }
+    }
+    if segs.is_empty() {
+        return None;
+    }
+    if let Some((_, a)) = segs.iter().find(|(_, a)| a.resident.is_some()) {
+        return Some(Resolved::Resident(a.resident.clone().unwrap()));
+    }
+    segs.sort_by_key(|(v, _)| *v);
+    segs.dedup_by_key(|(v, _)| *v);
+    let mut runs = Vec::new();
+    let mut size = 0u64;
+    for (vcn, a) in &segs {
+        runs.extend(ntfs_runs(a.runs.as_deref().unwrap_or(&[])));
+        if *vcn == 0 {
+            size = a.size;
+        }
+    }
+    if size == 0 {
+        size = segs.iter().map(|(_, a)| a.size).max().unwrap_or(0);
+    }
+    Some(Resolved::Runs(runs, size))
+}
+
+// ─── NTFS directory index (names for records whose $FILE_NAME is gone) ───────
+
+/// Fix up a record guarded by `magic` (`FILE` or `INDX`).
+fn fixup(rec: &mut [u8], magic: &[u8; 4]) -> bool {
+    if rec.len() < 48 || &rec[..4] != magic {
+        return false;
+    }
+    let (uo, un) = (u16le(rec, 4) as usize, u16le(rec, 6) as usize);
+    if uo + 2 * un > rec.len() {
+        return false;
+    }
+    let usn = [rec[uo], rec[uo + 1]];
+    for i in 1..un {
+        let p = i * 512 - 2;
+        if p + 2 > rec.len() || rec[p..p + 2] != usn {
+            return false;
+        }
+        rec[p] = rec[uo + 2 * i];
+        rec[p + 1] = rec[uo + 2 * i + 1];
+    }
+    true
+}
+
+/// Walk `$FILE_NAME` index entries from `entries_off` (relative to the buffer)
+/// until the last-entry flag, calling `f(record, parent, name)`.
+fn index_entries(buf: &[u8], entries_off: usize, mut f: impl FnMut(u64, u64, String)) {
+    let mut p = entries_off;
+    while p + 16 <= buf.len() {
+        let rec = u64le(buf, p) & 0x0000_FFFF_FFFF_FFFF;
+        let len = u16le(buf, p + 8) as usize;
+        let stream_len = u16le(buf, p + 10) as usize;
+        let flags = u32le(buf, p + 12);
+        if len < 16 || p + len > buf.len() {
+            break;
+        }
+        if flags & 0x02 != 0 {
+            break; // last entry
+        }
+        let s = &buf[p + 16..(p + 16 + stream_len.min(len - 16)).min(buf.len())];
+        if s.len() >= 66 {
+            let parent = u64le(s, 0) & 0x0000_FFFF_FFFF_FFFF;
+            let n = s[64] as usize;
+            if 66 + 2 * n <= s.len() {
+                f(rec, parent, utf16(&s[66..66 + 2 * n]));
+            }
+        }
+        p += len;
+    }
+}
+
+/// Entries of a resident `$INDEX_ROOT` value, if it indexes `$FILE_NAME`.
+fn index_root_entries(root: &[u8]) -> Vec<(u64, u64, String)> {
+    let mut out = Vec::new();
+    if root.len() < 0x10 + 16 || u32le(root, 0) != 0x30 {
+        return out;
+    }
+    let entries = 0x10 + u32le(root, 0x10) as usize;
+    index_entries(root, entries, |r, p, n| out.push((r, p, n)));
+    out
+}
+
+/// Entries of an `$INDEX_ALLOCATION` value: a series of `INDX` blocks.
+fn index_alloc_entries(data: &[u8], block: usize) -> Vec<(u64, u64, String)> {
+    let mut out = Vec::new();
+    if block < 512 {
+        return out;
+    }
+    for b in data.chunks(block) {
+        if b.len() < 0x18 + 16 {
+            break;
+        }
+        let mut b = b.to_vec();
+        if !fixup(&mut b, b"INDX") {
+            continue;
+        }
+        let entries = 0x18 + u32le(&b, 0x18) as usize;
+        index_entries(&b, entries, |r, p, n| out.push((r, p, n)));
+    }
+    out
+}
+
+/// Map every deleted MFT record to the name the directory index still holds
+/// for it (the Linux ntfs3 driver removes `$FILE_NAME` from the record but the
+/// stale index entry can survive in the index buffer slack).
+fn index_name_map(recs: &HashMap<u64, NtfsRecord>, src: &dyn Source, lcn_off: &dyn Fn(i64) -> u64, cs: u64) -> HashMap<u64, (u64, String)> {
+    let mut out = HashMap::new();
+    for i in recs.keys() {
+        if !r_is_dir(recs, *i) {
+            continue;
+        }
+        let list = record_attr_list(recs, *i, src, lcn_off, cs);
+        let root = resolve_attr(recs, &list, *i, 0x90, false);
+        let block = match &root {
+            Some(Resolved::Resident(b)) if b.len() >= 0x0C => u32le(b, 8) as usize,
+            _ => 0,
+        };
+        if let Some(Resolved::Resident(b)) = root {
+            for (r, p, n) in index_root_entries(&b) {
+                out.entry(r).or_insert((p, n));
+            }
+        }
+        if let Some(Resolved::Runs(runs, size)) = resolve_attr(recs, &list, *i, 0xA0, false) {
+            let data = read_runs(src, &runs, size, lcn_off, cs);
+            for (r, p, n) in index_alloc_entries(&data, block) {
+                out.entry(r).or_insert((p, n));
+            }
+        }
+    }
+    out
 }
 
 fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
@@ -682,7 +937,14 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
     if !ntfs_fixup(&mut rec0) {
         return Err(io::Error::other("MFT record 0 unreadable"));
     }
-    let Some(Err((mft_runs, _))) = ntfs_record(&rec0).data else {
+    let rec0 = ntfs_record(&rec0);
+    let mft_runs = rec0
+        .attrs
+        .iter()
+        .find(|a| a.type_ == 0x80 && !a.named)
+        .and_then(|a| a.runs.as_deref())
+        .map(ntfs_runs);
+    let Some(mft_runs) = mft_runs else {
         return Err(io::Error::other("no $MFT data runs"));
     };
     // Every record: index → parsed record.
@@ -711,30 +973,27 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
         }
     }
     // $Bitmap (record 6): cluster allocation now.
-    let bitmap: Vec<u8> = match recs.get(&6).and_then(|r| r.data.clone()) {
-        Some(Err((runs, size))) => {
-            let mut v = Vec::new();
-            for (l, c) in runs {
-                match l {
-                    Some(l) => v.extend(read(src, lcn_off(l), (c * cs) as usize).unwrap_or_default()),
-                    None => v.extend(vec![0u8; (c * cs) as usize]),
-                }
-            }
-            v.truncate(size as usize);
-            v
+    let bitmap: Vec<u8> = {
+        let list = record_attr_list(&recs, 6, src, &lcn_off, cs);
+        match resolve_attr(&recs, &list, 6, 0x80, true) {
+            Some(Resolved::Resident(v)) => v,
+            Some(Resolved::Runs(runs, size)) => read_runs(src, &runs, size, &lcn_off, cs),
+            None => Vec::new(),
         }
-        Some(Ok(v)) => v,
-        None => Vec::new(),
     };
     let allocated = |c: u64| bitmap.get((c / 8) as usize).is_some_and(|b| b & (1 << (c % 8)) != 0);
     let map = vol_map(vol, "NTFS", 0, cs, 0, vol.size / cs, allocated);
+    // Names the directory index still holds for records whose $FILE_NAME is
+    // gone (ntfs3). Only computed when a deleted file actually needs it.
+    let need_names = recs.iter().any(|(i, r)| *i >= 24 && !r.in_use && !r.is_dir && r.has_data() && r.name().is_none());
+    let index_names = if need_names { index_name_map(&recs, src, &lcn_off, cs) } else { HashMap::new() };
     let path_of = |mut parent: u64, name: &str| {
         let mut parts = vec![name.to_string()];
         for _ in 0..64 {
             if parent == 5 {
                 return parts.into_iter().rev().collect::<Vec<_>>().join("/");
             }
-            match recs.get(&parent).and_then(|r| r.name.clone()) {
+            match recs.get(&parent).and_then(|r| r.name()) {
                 Some((p, n)) if r_is_dir(&recs, parent) => {
                     parts.push(n);
                     parent = p;
@@ -753,28 +1012,35 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
         if *i < 24 || r.in_use || r.is_dir {
             continue;
         }
-        let Some(data) = &r.data else { continue };
-        let path = match &r.name {
-            Some((parent, name)) => path_of(*parent, name),
-            None => {
-                // Name removed on delete (Linux ntfs3): type from the contents.
-                let head = match data {
-                    Ok(b) => b.iter().take(16).copied().collect(),
-                    Err((runs, _)) => match runs.first() {
-                        Some((Some(l), _)) => read(src, lcn_off(*l), 16).unwrap_or_default(),
-                        _ => Vec::new(),
-                    },
-                };
-                format!("$NoName/record-{i}.{}", guess_ext(&head))
-            }
+        let list = record_attr_list(&recs, *i, src, &lcn_off, cs);
+        let Some(data) = resolve_attr(&recs, &list, *i, 0x80, true) else { continue };
+        let name = r
+            .name()
+            .or_else(|| list.iter().filter(|e| e.type_ == 0x30).find_map(|e| recs.get(&e.record).and_then(|x| x.name())));
+        let path = match name {
+            Some((parent, name)) => path_of(parent, &name),
+            None => match index_names.get(i) {
+                Some((parent, name)) => path_of(*parent, name),
+                None => {
+                    // Name removed on delete (Linux ntfs3): type from the contents.
+                    let head = match &data {
+                        Resolved::Resident(b) => b.iter().take(16).copied().collect(),
+                        Resolved::Runs(runs, _) => match runs.first() {
+                            Some((Some(l), _)) => read(src, lcn_off(*l), 16).unwrap_or_default(),
+                            _ => Vec::new(),
+                        },
+                    };
+                    format!("$NoName/record-{i}.{}", guess_ext(&head))
+                }
+            },
         };
         let (data, size, st) = match data {
-            Ok(bytes) => (Data::Resident(bytes.clone()), bytes.len() as u64, State::Intact),
-            Err((runs, size)) => {
+            Resolved::Resident(bytes) => (Data::Resident(bytes.clone()), bytes.len() as u64, State::Intact),
+            Resolved::Runs(runs, size) => {
                 let mut ext = Vec::new();
                 let (mut total, mut used) = (0usize, 0usize);
-                let mut left = *size;
-                for (l, c) in runs {
+                let mut left = size;
+                for (l, c) in &runs {
                     let bytes = (c * cs).min(left);
                     if bytes == 0 {
                         break;
@@ -791,7 +1057,7 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
                     }
                     left -= bytes;
                 }
-                (Data::Extents(ext), *size, state(used, total.max(1)))
+                (Data::Extents(ext), size, state(used, total.max(1)))
             }
         };
         out.push(Deleted { volume: format!("{} (NTFS)", vol.label), path, size, state: st, data, note: None });
@@ -1060,6 +1326,162 @@ fn is_header(s: &[u8]) -> bool {
         || s.starts_with(b"PK\x03\x04")
 }
 
+/// Group cluster indices `0..count` into byte ranges wherever `free` holds;
+/// `off(c)` is the byte offset of cluster `c` (the end of a run is `off(c)` of
+/// the first free cluster after it, so the ranges are contiguous).
+fn cluster_runs(count: u64, free: impl Fn(u64) -> bool, off: impl Fn(u64) -> u64) -> Vec<(u64, u64)> {
+    let mut v = Vec::new();
+    let mut c = 0u64;
+    while c < count {
+        if free(c) {
+            let start = c;
+            while c < count && free(c) {
+                c += 1;
+            }
+            v.push((off(start), off(c)));
+        } else {
+            c += 1;
+        }
+    }
+    v
+}
+
+/// Free clusters of a volume as byte ranges, when its allocation table is
+/// understood (NTFS `$Bitmap`, FAT32 table, exFAT bitmap). Unsupported
+/// filesystems return an error and the caller carves the whole volume.
+pub fn free_ranges(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
+    match vol.fs {
+        "FAT32" => fat32_free(src, vol),
+        "exFAT" => exfat_free(src, vol),
+        "NTFS" => ntfs_free(src, vol),
+        _ => Err(io::Error::other("no free-space bitmap for this filesystem")),
+    }
+}
+
+fn fat32_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
+    let b = read(src, vol.base, 512)?;
+    let bps = u16le(&b, 11) as u64;
+    let spc = b[13] as u64;
+    let reserved = u16le(&b, 14) as u64;
+    let nfats = b[16] as u64;
+    let fatsz = u32le(&b, 36) as u64;
+    if bps == 0 || spc == 0 || fatsz == 0 {
+        return Err(io::Error::other("bad FAT32 boot sector"));
+    }
+    let raw = read(src, vol.base + reserved * bps, (fatsz * bps) as usize)?;
+    let fat: Vec<u32> = raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let cs = bps * spc;
+    let data = (reserved + nfats * fatsz) * bps;
+    let count = (vol.size.saturating_sub(data) / cs).min(fat.len() as u64 - 2);
+    let off = |c: u64| vol.base + data + c * cs;
+    Ok(cluster_runs(count, |c| fat.get((c + 2) as usize).is_some_and(|v| v & 0x0FFF_FFFF == 0), off))
+}
+
+fn exfat_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
+    let b = read(src, vol.base, 512)?;
+    let bps = 1u64 << b[108];
+    let cs = bps << b[109];
+    let fat_off = u32le(&b, 80) as u64 * bps;
+    let heap = u32le(&b, 88) as u64 * bps;
+    let count = u32le(&b, 92);
+    let root = u32le(&b, 96);
+    if cs == 0 || count == 0 {
+        return Err(io::Error::other("bad exFAT boot sector"));
+    }
+    let fat_raw = read(src, vol.base + fat_off, (count as usize + 2) * 4)?;
+    let fat: Vec<u32> = fat_raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let off = |c: u32| vol.base + heap + (c as u64 - 2) * cs;
+    let valid = |c: u32| c >= 2 && c < count + 2;
+    let chain = |mut c: u32| {
+        let mut v = Vec::new();
+        let mut seen = HashSet::new();
+        while valid(c) && seen.insert(c) {
+            v.push(c);
+            c = fat[c as usize];
+            if c >= 0xFFFF_FFF7 {
+                break;
+            }
+        }
+        v
+    };
+    let mut bitmap = Vec::new();
+    let mut root_bytes = Vec::new();
+    for cl in chain(root) {
+        root_bytes.extend(read(src, off(cl), cs as usize).unwrap_or_default());
+    }
+    for e in root_bytes.chunks_exact(32) {
+        if e[0] == 0x81 {
+            let (c, len) = (u32le(e, 20), u64le(e, 24));
+            let mut bm = Vec::new();
+            for cl in chain(c) {
+                bm.extend(read(src, off(cl), cs as usize).unwrap_or_default());
+            }
+            bm.truncate(len as usize);
+            bitmap = bm;
+            break;
+        }
+    }
+    let in_use = |c: u64| bitmap.get((c / 8) as usize).is_some_and(|b| b & (1 << (c % 8)) != 0);
+    let off2 = |c: u64| vol.base + heap + c * cs;
+    Ok(cluster_runs(count as u64, |c| !in_use(c), off2))
+}
+
+fn ntfs_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
+    let b = read(src, vol.base, 512)?;
+    let cs = (u16le(&b, 11) as u64) * b[13] as u64;
+    let mft_lcn = u64le(&b, 48);
+    let cpr = b[64] as i8;
+    let rs = if cpr > 0 { cs * cpr as u64 } else { 1u64 << (-cpr as u32) };
+    if cs == 0 || rs == 0 || rs > 65536 {
+        return Err(io::Error::other("bad NTFS boot sector"));
+    }
+    let lcn_off = |l: i64| vol.base + l as u64 * cs;
+    let mut rec0 = read(src, lcn_off(mft_lcn as i64), rs as usize)?;
+    if !ntfs_fixup(&mut rec0) {
+        return Err(io::Error::other("MFT record 0 unreadable"));
+    }
+    let rec0 = ntfs_record(&rec0);
+    let mft_runs = rec0
+        .attrs
+        .iter()
+        .find(|a| a.type_ == 0x80 && !a.named)
+        .and_then(|a| a.runs.as_deref())
+        .map(ntfs_runs)
+        .ok_or_else(|| io::Error::other("no $MFT data runs"))?;
+    // Record 6 holds $Bitmap; find it in the MFT by byte offset.
+    let mut vcn = 0u64;
+    let mut rec6 = None;
+    for (l, c) in &mft_runs {
+        let run = c * cs;
+        if 6 * rs < vcn + run {
+            if let Some(l) = l {
+                let off = lcn_off(*l) + (6 * rs - vcn);
+                if let Ok(mut r) = read(src, off, rs as usize) {
+                    if ntfs_fixup(&mut r) {
+                        rec6 = Some(ntfs_record(&r));
+                    }
+                }
+            }
+            break;
+        }
+        vcn += run;
+    }
+    let Some(rec6) = rec6 else {
+        return Err(io::Error::other("no $Bitmap record"));
+    };
+    let attr6 = rec6.attrs.iter().find(|a| a.type_ == 0x80 && !a.named);
+    let runs = attr6
+        .and_then(|a| a.runs.as_deref())
+        .map(ntfs_runs)
+        .ok_or_else(|| io::Error::other("no $Bitmap data runs"))?;
+    let bitmap_bytes = attr6.map(|a| a.size).filter(|s| *s > 0).unwrap_or_else(|| runs.iter().map(|(_, c)| c * cs).sum());
+    let bitmap = read_runs(src, &runs, bitmap_bytes, &lcn_off, cs);
+    let allocated = |c: u64| bitmap.get((c / 8) as usize).is_some_and(|b| b & (1 << (c % 8)) != 0);
+    let count = vol.size / cs;
+    let off = |c: u64| vol.base + c * cs;
+    Ok(cluster_runs(count, |c| !allocated(c), off))
+}
+
 /// Search 512-byte-aligned file headers from `start` to `end` of the source.
 pub fn carve(src: &dyn Source, start: u64, end: u64, progress: &mut dyn FnMut(u64, u64)) -> Vec<Carved> {
     let mut out = Vec::new();
@@ -1102,7 +1524,7 @@ pub fn carve(src: &dyn Source, start: u64, end: u64, progress: &mut dyn FnMut(u6
 // ─── output directory safety ────────────────────────────────────────────────
 
 /// Refuse a destination on the same physical disk as the source device.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn check_destination(source: &str, dest: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::FileTypeExt;
     let meta = std::fs::metadata(source).map_err(|e| format!("{source}: {e}"))?;
@@ -1126,7 +1548,7 @@ pub fn check_destination(source: &str, dest: &std::path::Path) -> Result<(), Str
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 pub fn check_destination(_: &str, _: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
@@ -1135,7 +1557,7 @@ pub fn check_destination(_: &str, _: &std::path::Path) -> Result<(), String> {
 
 pub fn cmd(args: &[String]) -> i32 {
     let usage = "Usage: dcheck undelete <device | partition | image> [--to DIR] [--match PATTERN]\n\
-                 \x20                     [--include-overwritten] [--carve]\n\n\
+                 \x20                     [--include-overwritten] [--carve [--free]]\n\n\
                  Lists deleted files (NTFS, FAT32, exFAT: names kept) and, with --to,\n\
                  recovers them into DIR, which must be on ANOTHER disk. The source is\n\
                  only read. Best: image the disk first (ddrescue) and work on the image.\n\n  \
@@ -1143,8 +1565,10 @@ pub fn cmd(args: &[String]) -> i32 {
                  --match PATTERN        only files matching, e.g. '*.xlsx' or 'Dokumen*'\n  \
                  --include-overwritten  also write files whose space is in use again\n  \
                  --carve                ext4 / XFS / btrfs / unknown: search the raw data for\n                         \
-                 JPEG, PNG, PDF and ZIP / Office files (names are lost); needs --to";
-    let (mut src, mut to, mut pat, mut all, mut carve_mode) = (None, None, None, false, false);
+                 JPEG, PNG, PDF and ZIP / Office files (names are lost); needs --to\n  \
+                 --free                 with --carve: only search the free clusters of NTFS /\n                         \
+                 FAT32 / exFAT (skip live files); other filesystems are carved whole";
+    let (mut src, mut to, mut pat, mut all, mut carve_mode, mut free) = (None, None, None, false, false, false);
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1162,6 +1586,7 @@ pub fn cmd(args: &[String]) -> i32 {
             }
             "--include-overwritten" => all = true,
             "--carve" => carve_mode = true,
+            "--free" => free = true,
             f if f.starts_with('-') => {
                 eprintln!("dcheck: unknown option '{f}'\n\n{usage}");
                 return 2;
@@ -1209,7 +1634,7 @@ pub fn cmd(args: &[String]) -> i32 {
             eprintln!("dcheck: --carve needs --to DIR");
             return 2;
         };
-        return carve_cmd(&source, std::path::Path::new(dir));
+        return carve_cmd(&source, std::path::Path::new(dir), free);
     }
     let s = scan(&source);
     for l in scan_lines(&s) {
@@ -1283,10 +1708,23 @@ pub fn scan_lines(s: &Scan) -> Vec<String> {
     out
 }
 
-fn carve_cmd(src: &dyn Source, dir: &std::path::Path) -> i32 {
+fn carve_cmd(src: &dyn Source, dir: &std::path::Path, free: bool) -> i32 {
     let vols = volumes(src);
     let ranges: Vec<(u64, u64)> = if vols.is_empty() {
         vec![(0, src.len())]
+    } else if free {
+        let mut r = Vec::new();
+        for v in &vols {
+            match free_ranges(src, v) {
+                Ok(rs) if !rs.is_empty() => r.extend(rs),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("  {} ({}): {e} — carving the whole volume", v.label, v.fs);
+                    r.push((v.base, v.base + v.size));
+                }
+            }
+        }
+        r
     } else {
         vols.iter().map(|v| (v.base, v.base + v.size)).collect()
     };
@@ -1504,5 +1942,192 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "x").unwrap();
         assert_eq!(free_path(&dir, "a.txt").file_name().unwrap(), "a (1).txt");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── NTFS $ATTRIBUTE_LIST / index slack ──────────────────────────────────
+
+    fn attr_resident(type_: u32, id: u16, named: bool, value: &[u8]) -> Vec<u8> {
+        let (co, len) = (24usize, 24 + value.len());
+        let mut a = vec![0u8; len];
+        a[0..4].copy_from_slice(&type_.to_le_bytes());
+        a[4..8].copy_from_slice(&(len as u32).to_le_bytes());
+        a[8] = 0;
+        a[9] = named as u8;
+        a[14..16].copy_from_slice(&id.to_le_bytes());
+        a[16..20].copy_from_slice(&(value.len() as u32).to_le_bytes());
+        a[20..22].copy_from_slice(&(co as u16).to_le_bytes());
+        a[24..].copy_from_slice(value);
+        a
+    }
+
+    fn attr_nonresident(type_: u32, id: u16, vcn: u64, size: u64, runs: &[u8]) -> Vec<u8> {
+        let (ro, len) = (64usize, 64 + runs.len());
+        let mut a = vec![0u8; len];
+        a[0..4].copy_from_slice(&type_.to_le_bytes());
+        a[4..8].copy_from_slice(&(len as u32).to_le_bytes());
+        a[8] = 1;
+        a[14..16].copy_from_slice(&id.to_le_bytes());
+        a[16..24].copy_from_slice(&vcn.to_le_bytes());
+        a[24..32].copy_from_slice(&vcn.to_le_bytes());
+        a[32..34].copy_from_slice(&(ro as u16).to_le_bytes());
+        a[48..56].copy_from_slice(&size.to_le_bytes());
+        a[ro..].copy_from_slice(runs);
+        a
+    }
+
+    fn record(flags: u16, attrs: &[Vec<u8>]) -> Vec<u8> {
+        let mut rec = vec![0u8; 1024];
+        rec[..4].copy_from_slice(b"FILE");
+        rec[20..22].copy_from_slice(&48u16.to_le_bytes());
+        rec[22..24].copy_from_slice(&flags.to_le_bytes());
+        let mut off = 48usize;
+        for a in attrs {
+            rec[off..off + a.len()].copy_from_slice(a);
+            off += a.len();
+        }
+        rec[off..off + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        rec
+    }
+
+    fn list_entry(type_: u32, id: u16, record: u64, vcn: u64) -> Vec<u8> {
+        let mut e = vec![0u8; 26];
+        e[0..4].copy_from_slice(&type_.to_le_bytes());
+        e[4..6].copy_from_slice(&26u16.to_le_bytes());
+        e[8..16].copy_from_slice(&vcn.to_le_bytes());
+        e[16..24].copy_from_slice(&record.to_le_bytes());
+        e[24..26].copy_from_slice(&id.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn follows_attribute_list_across_extension_records() {
+        // A highly fragmented $DATA split into two extents, the second one in
+        // another MFT record. Each extent runlist is absolute on its own.
+        let list: Vec<u8> = [list_entry(0x80, 1, 41, 0), list_entry(0x80, 2, 42, 2)].concat();
+        let base = record(0, &[attr_resident(0x20, 0, false, &list)]);
+        // LCN 100, 2 clusters (len 1 byte, offset 1 byte).
+        let ext1 = record(0, &[attr_nonresident(0x80, 1, 0, 3 * 4096, &[0x11, 2, 100, 0x00])]);
+        // LCN 500, 1 cluster: absolute, not relative to the previous extent.
+        let ext2 = record(0, &[attr_nonresident(0x80, 2, 2, 0, &[0x21, 1, 0xF4, 0x01, 0x00])]);
+        let mut recs = HashMap::new();
+        recs.insert(40u64, ntfs_record(&base));
+        recs.insert(41u64, ntfs_record(&ext1));
+        recs.insert(42u64, ntfs_record(&ext2));
+        let parsed = attr_list_entries(&recs[&40].attrs[0].resident.clone().unwrap());
+        assert_eq!(parsed, vec![
+            AttrRef { type_: 0x80, id: 1, named: false, record: 41, vcn: 0 },
+            AttrRef { type_: 0x80, id: 2, named: false, record: 42, vcn: 2 },
+        ]);
+        match resolve_attr(&recs, &parsed, 40, 0x80, true) {
+            Some(Resolved::Runs(runs, size)) => {
+                assert_eq!(runs, vec![(Some(100), 2), (Some(500), 1)]);
+                assert_eq!(size, 3 * 4096);
+            }
+            other => panic!("expected merged runs, got {other:?}"),
+        }
+    }
+
+    fn file_name_value(parent: u64, name: &str) -> Vec<u8> {
+        let units: Vec<u16> = name.encode_utf16().collect();
+        let mut v = vec![0u8; 66 + units.len() * 2];
+        v[0..8].copy_from_slice(&parent.to_le_bytes());
+        v[64] = units.len() as u8;
+        v[65] = 1;
+        for (k, u) in units.iter().enumerate() {
+            v[66 + 2 * k..68 + 2 * k].copy_from_slice(&u.to_le_bytes());
+        }
+        v
+    }
+
+    fn index_entry(rec: u64, parent: u64, name: &str) -> Vec<u8> {
+        let fname = file_name_value(parent, name);
+        let mut e = vec![0u8; 16 + fname.len()];
+        e[0..8].copy_from_slice(&rec.to_le_bytes());
+        e[8..10].copy_from_slice(&((16 + fname.len()) as u16).to_le_bytes());
+        e[10..12].copy_from_slice(&(fname.len() as u16).to_le_bytes());
+        e[16..].copy_from_slice(&fname);
+        e
+    }
+
+    #[test]
+    fn reads_names_from_index_root_and_allocation() {
+        let mut root = vec![0u8; 0x20];
+        root[0..4].copy_from_slice(&0x30u32.to_le_bytes());
+        root[8..12].copy_from_slice(&512u32.to_le_bytes());
+        root[0x10..0x14].copy_from_slice(&16u32.to_le_bytes()); // entries at 0x20
+        root.extend(index_entry(77, 5, "laporan.xlsx"));
+        root.extend([0u8; 12]);
+        root.extend(2u32.to_le_bytes()); // last entry flag
+        assert_eq!(index_root_entries(&root), vec![(77, 5, "laporan.xlsx".into())]);
+
+        // An INDX block with the update-sequence fixup applied, entries at 0x38.
+        let mut block = vec![0u8; 512];
+        block[..4].copy_from_slice(b"INDX");
+        block[4..6].copy_from_slice(&48u16.to_le_bytes());
+        block[6..8].copy_from_slice(&2u16.to_le_bytes());
+        block[48..50].copy_from_slice(&[0xAB, 0xCD]);
+        block[0x18..0x1C].copy_from_slice(&32u32.to_le_bytes()); // entries at 0x38
+        let e = index_entry(78, 5, "photo.jpg");
+        block[0x38..0x38 + e.len()].copy_from_slice(&e);
+        let last = 0x38 + e.len();
+        block[last + 12..last + 16].copy_from_slice(&2u32.to_le_bytes());
+        block[510..512].copy_from_slice(&[0xAB, 0xCD]);
+        assert_eq!(index_alloc_entries(&block, 512), vec![(78, 5, "photo.jpg".into())]);
+    }
+
+    #[test]
+    fn free_ranges_exclude_allocated_clusters() {
+        for n in ["fat32", "exfat", "ntfs"] {
+            let img = fixture(n);
+            let vols = volumes(&img);
+            assert_eq!(vols.len(), 1, "{n}");
+            let ranges = free_ranges(&img, &vols[0]).unwrap_or_else(|e| panic!("{n}: {e}"));
+            assert!(!ranges.is_empty(), "{n}: no free ranges");
+            let mut prev = vols[0].base;
+            for (a, b) in &ranges {
+                assert!(a >= &prev && b > a, "{n}: bad range {a}..{b}");
+                assert!(b <= &(vols[0].base + vols[0].size), "{n}: range past volume");
+                prev = *b;
+            }
+            assert!(ranges.len() > 1, "{n}: allocation should have gaps");
+        }
+    }
+
+    #[test]
+    fn free_carving_skips_allocated_space() {
+        let mut img = fixture("fat32");
+        let vols = volumes(&img);
+        let ranges = free_ranges(&img, &vols[0]).unwrap();
+        let jpg: Vec<u8> = [&[0xFF, 0xD8, 0xFF][..], &[7u8; 60][..], &[0xFF, 0xD9][..]].concat();
+        // One header in free space, one in the allocated gap before it.
+        let (free_at, _) = ranges[0];
+        // The first byte after a free run starts an allocated cluster.
+        let gap = ranges[0].1;
+        assert_ne!(gap, free_at);
+        for at in [free_at as usize, gap as usize] {
+            if at + jpg.len() <= img.len() {
+                img[at..at + jpg.len()].copy_from_slice(&jpg);
+            }
+        }
+        let mut found = Vec::new();
+        for (a, b) in &ranges {
+            found.extend(carve(&img, *a, *b, &mut |_, _| {}));
+        }
+        assert!(found.iter().any(|c| c.offset == free_at), "free jpg not found: {found:?}");
+        assert!(!found.iter().any(|c| c.offset == gap as u64), "allocated jpg was carved");
+        assert!(gap >= vols[0].base);
+    }
+
+    #[test]
+    fn contiguity_assumption_is_noted() {
+        // big.bin needs several clusters: FAT32 has no per-file chain left, so
+        // it says the location is an assumption.
+        let s = scan(&fixture("fat32"));
+        let b = s.files.iter().find(|f| f.path == "big.bin").unwrap();
+        assert_eq!(b.note, Some("assumed contiguous"));
+        // exFAT keeps NoFatChain: a contiguous deleted file needs no assumption.
+        let s = scan(&fixture("exfat"));
+        let b = s.files.iter().find(|f| f.size == 20000).unwrap();
+        assert_eq!(b.note, None);
     }
 }

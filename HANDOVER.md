@@ -201,11 +201,14 @@ minta langsung ke pemilik.
 ## 7. Pekerjaan terbuka (prioritas)
 
 1. **Keaslian disk (TODO G/K/N).** `authenticity.rs` dan `dcheck verify`
-   sudah jadi. Sisa: SMART yang tidak masuk akal, jam FARM Seagate vs SMART,
-   `verify` di macOS. Tabel OUI diperbarui dengan `scripts/gen-dcheck-oui.sh`.
+   sudah jadi. Sisa: SMART yang tidak masuk akal, jam FARM Seagate vs SMART.
+   `verify` free space sudah jalan di macOS; `--destructive` tetap Linux.
+   Tabel OUI diperbarui dengan `scripts/gen-dcheck-oui.sh`.
 2. **Recover / undelete (TODO O/Q).** Sisa: FAT32/exFAT terfragmentasi
-   (sekarang diasumsikan berurutan), NTFS `$ATTRIBUTE_LIST`, nama file
-   ntfs3 dari index slack direktori, carving hanya di free space, macOS.
+   (sekarang tetap diasumsikan berurutan — didokumentasikan), `--carve --free`
+   dari TUI, FreeBSD. Sudah: NTFS `$ATTRIBUTE_LIST`, nama file ntfs3 dari
+   index slack, carving hanya di free space (NTFS/FAT32/exFAT), macOS
+   (penilaian recover; undelete sudah lintas-Unix).
 3. **Kesehatan RAM (TODO G):** ECC per DIMM + label slot (EDAC sudah
    terbaca), `HardwareCorrupted`, riwayat rasdaemon, SPD. IPMI SEL sudah
    dibaca oleh modul board (event memori tampil di EVENT LOG), tapi belum

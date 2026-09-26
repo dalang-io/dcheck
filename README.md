@@ -224,10 +224,10 @@ mounted and unmounted partitions, and ignored virtual devices.
 
 | OS | Status |
 |----|--------|
-| Linux (any distro, static) | full: enumeration, native SMART (ATA/NVMe/SCSI), TUI, JSON |
+| Linux (any distro, static) | full: enumeration, native SMART (ATA/NVMe/SCSI), TUI, JSON, recover map, `verify --destructive` |
 | WayangOS (minimal rootfs) | full (native SMART — no smartctl needed) |
-| macOS | physical disks via `diskutil` (model, size, SSD/HDD, SMART status); full attributes via smartmontools if installed |
-| FreeBSD | enumeration + identity/health via smartctl |
+| macOS | physical disks via `diskutil` (model, size, SSD/HDD, SMART status); full attributes via smartmontools if installed; `recover` triage and `verify` free space; undelete with destination-on-another-disk checks |
+| FreeBSD | enumeration + identity/health via smartctl; `recover`/`verify`/undelete not implemented yet |
 
 ## Configuration
 
@@ -308,7 +308,10 @@ dcheck verify /dev/sdb --destructive  # empty, unmounted drive: whole disk
   mounted, used as swap or held by LVM/RAID/dm. It lists what is on the
   drive (partitions, ext4/XFS/btrfs/NTFS/FAT/exFAT/LVM/LUKS/GPT/MBR…) and
   asks you to type the device name — or `ERASE <name>` when it holds data.
-- Exit 0 pass, 3 bad data, 1 error/aborted. Linux only for now.
+- Exit 0 pass, 3 bad data, 1 error/aborted.
+- Linux and macOS. On macOS the free-space mode uses `diskutil`/`df`; the raw
+  `--destructive` mode stays Linux-only (it flushes block devices with a
+  Linux ioctl). FreeBSD and other targets are not implemented yet.
 
 ## Deleted a file? `dcheck recover`
 
@@ -325,10 +328,13 @@ estimates whether deleted files can still come back and says what to do:
   live USB for the system disk), image with `ddrescue` to another disk,
   then the right tool on the image (ntfsundelete, testdisk, ext4magic,
   xfs_undelete, btrfs restore, photorec).
-- **Disk map** (root): samples the disk (512 cells × 4 blocks) and draws
-  where it still holds data; per filesystem it compares that with the used
-  space: e.g. an HDD at 63% used with data in 97% of samples → ~92% of its
-  free space still holds old data; an SSD with `discard=async` → ~0%.
+- **Disk map** (Linux, root): samples the disk (512 cells × 4 blocks) and
+  draws where it still holds data; per filesystem it compares that with the
+  used space: e.g. an HDD at 63% used with data in 97% of samples → ~92% of
+  its free space still holds old data; an SSD with `discard=async` → ~0%.
+- **macOS**: the chance/steps assessment works from `mount`/`df`/`diskutil`
+  (APFS on an SSD trims automatically, so snapshots / Time Machine are the
+  route); the raw disk map needs the Linux block-device layer and is skipped.
 
 ## Undelete: `dcheck undelete`
 
@@ -337,16 +343,26 @@ sudo dcheck undelete /dev/sdb1                    # list deleted files (read-onl
 sudo dcheck undelete /dev/sdb1 --to /mnt/usb/rescue --match '*.xlsx'
 sudo dcheck undelete disk.img --to /mnt/usb/rescue  # a ddrescue image (whole disk or partition)
 sudo dcheck undelete /dev/sdb --carve --to /mnt/usb/rescue   # ext4 / XFS / btrfs
+sudo dcheck undelete /dev/sdb --carve --free --to /mnt/usb/rescue   # only free clusters
 ```
 
 - **NTFS**: the deleted file's MFT record keeps name, folder, size and data
-  runs (fragmented files too); small files are inside the record. Windows
-  and ntfs-3g keep the name; Linux's ntfs3 driver drops it → recovered as
+  runs (fragmented files too); small files are inside the record. A file whose
+  runs spill out of the MFT record is followed through its `$ATTRIBUTE_LIST`
+  into the extension records. Windows and ntfs-3g keep the name; Linux's
+  ntfs3 driver drops it, so the name is looked up in the directory index
+  (`$I30`) slack, and only when that fails is the file recovered as
   `$NoName/record-N.<type>` (type from the contents).
-- **FAT32**: long name, size and first cluster remain; data assumed
-  contiguous. **exFAT**: name, size, first cluster and the contiguous flag.
+- **FAT32**: long name, size and first cluster remain; the cluster chain is
+  gone, so the data is **assumed contiguous** from the first cluster (true
+  for almost all unfragmented files; a fragmented file's tail is wrong until
+  you carve it). **exFAT**: name, size, first cluster and the NoFatChain
+  ("contiguous") flag; a fragmented file with the flag clear falls back to the
+  same assumption. Both say "assumed contiguous" on such files.
 - **Other filesystems**: `--carve` finds JPEG, PNG, PDF and ZIP / Office
-  files in the raw data (names are lost).
+  files in the raw data (names are lost). `--carve --free` searches only the
+  free clusters where the allocation table is known (NTFS / FAT32 / exFAT),
+  so live files are not carved again; elsewhere it carves the whole volume.
 - Each file is **INTACT** (its clusters are still free), **PARTLY REUSED** or
   **OVERWRITTEN** (from the FAT / exFAT bitmap / NTFS `$Bitmap`); overwritten
   files are skipped unless `--include-overwritten`.

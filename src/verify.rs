@@ -671,46 +671,62 @@ fn print_outcome(target: &str, o: &Outcome, device_mode: bool) -> i32 {
     code
 }
 
-#[cfg(target_os = "linux")]
-mod imp {
+/// Test-file and raw-device targets plus the free-space executor, shared by
+/// the Unix backends (the cache drop is the only platform-specific part).
+#[cfg(unix)]
+mod unix_impl {
     use std::fs::{self, File, OpenOptions};
     use std::io;
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{FileExt, OpenOptionsExt};
-    use std::path::{Path, PathBuf};
+    use std::os::unix::fs::FileExt;
+    use std::path::Path;
 
     use super::*;
-    use crate::model::Device;
 
-    fn confirm(question: &str) -> bool {
-        eprint!("{question} ");
-        let _ = io::stderr().flush();
-        let mut line = String::new();
-        io::stdin().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes" | "YES")
-    }
-
+    #[cfg(target_os = "linux")]
     extern "C" {
         fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> i32;
         fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
-        fn signal(signum: i32, handler: usize) -> usize;
     }
+    #[cfg(target_os = "linux")]
     const POSIX_FADV_DONTNEED: i32 = 4;
+    #[cfg(target_os = "linux")]
     const BLKFLSBUF: std::ffi::c_ulong = 0x1261;
-    const O_EXCL: i32 = 0o200;
 
-    extern "C" fn on_signal(_: i32) {
-        STOP.store(true, Ordering::Relaxed);
+    // macOS has no posix_fadvise; F_NOCACHE makes reads go to the device.
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     }
+    #[cfg(target_os = "macos")]
+    const F_NOCACHE: i32 = 48;
 
-    fn drop_cache(f: &File) {
+    #[cfg(target_os = "freebsd")]
+    extern "C" {
+        fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> i32;
+    }
+    #[cfg(target_os = "freebsd")]
+    const POSIX_FADV_DONTNEED: i32 = 4;
+
+    /// fsync happened; drop the OS page cache so reads come from the drive.
+    pub fn drop_cache(f: &File) {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            posix_fadvise(f.as_raw_fd(), 0, 0, POSIX_FADV_DONTNEED);
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            fcntl(f.as_raw_fd(), F_NOCACHE, 1);
+        }
+        #[cfg(target_os = "freebsd")]
         unsafe {
             posix_fadvise(f.as_raw_fd(), 0, 0, POSIX_FADV_DONTNEED);
         }
     }
 
     /// Test files of FILE_BYTES each in a directory.
-    struct Files {
-        dir: PathBuf,
+    pub struct Files {
+        dir: std::path::PathBuf,
         files: Vec<File>,
     }
     const FILE_BYTES: u64 = 1 << 30;
@@ -744,7 +760,8 @@ mod imp {
         }
     }
 
-    struct Raw(File);
+    /// A raw device (only used by `--destructive`, Linux).
+    pub struct Raw(pub File);
 
     impl Target for Raw {
         fn write_at(&mut self, off: u64, data: &[u8]) -> io::Result<()> {
@@ -756,11 +773,54 @@ mod imp {
         fn sync_drop(&mut self) -> io::Result<()> {
             self.0.sync_all()?;
             drop_cache(&self.0);
+            #[cfg(target_os = "linux")]
             unsafe {
                 ioctl(self.0.as_raw_fd(), BLKFLSBUF, 0);
             }
             Ok(())
         }
+    }
+
+    /// Write, read back and delete the test files.
+    pub fn execute(plan: &Plan, total: u64, seed: u64, progress: OnProgress) -> Result<(Outcome, Option<String>), String> {
+        let tdir = Path::new(&plan.base).join(format!(".dcheck-verify-{}", std::process::id()));
+        fs::create_dir(&tdir).map_err(|e| format!("cannot create {}: {e}", tdir.display()))?;
+        let mut files = Files { dir: tdir.clone(), files: Vec::new() };
+        let o = run(&mut files, total, seed, progress);
+        drop(files);
+        let cleanup = fs::remove_dir_all(&tdir)
+            .err()
+            .map(|e| format!("could not remove {}: {e} — delete it by hand", tdir.display()));
+        Ok((o, cleanup))
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::fs::{self, File, OpenOptions};
+    use std::io;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::{Path, PathBuf};
+
+    use super::unix_impl::Raw;
+    pub use super::unix_impl::execute;
+    use super::*;
+    use crate::model::Device;
+
+    fn confirm(question: &str) -> bool {
+        eprint!("{question} ");
+        let _ = io::stderr().flush();
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes" | "YES")
+    }
+
+    extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    const O_EXCL: i32 = 0o200;
+
+    extern "C" fn on_signal(_: i32) {
+        STOP.store(true, Ordering::Relaxed);
     }
 
     /// The disk from the enumeration, or any block device (e.g. a
@@ -982,19 +1042,6 @@ mod imp {
         })
     }
 
-    /// Write, read back and delete the test files.
-    pub fn execute(plan: &Plan, total: u64, seed: u64, progress: OnProgress) -> Result<(Outcome, Option<String>), String> {
-        let tdir = Path::new(&plan.base).join(format!(".dcheck-verify-{}", std::process::id()));
-        fs::create_dir(&tdir).map_err(|e| format!("cannot create {}: {e}", tdir.display()))?;
-        let mut files = Files { dir: tdir.clone(), files: Vec::new() };
-        let o = run(&mut files, total, seed, progress);
-        drop(files);
-        let cleanup = fs::remove_dir_all(&tdir)
-            .err()
-            .map(|e| format!("could not remove {}: {e} — delete it by hand", tdir.display()));
-        Ok((o, cleanup))
-    }
-
     fn free_space_run(d: &Device, size: Option<u64>, dir: Option<String>, yes: bool, full: bool, seed: u64) -> i32 {
         let plan = match plan(d, dir) {
             Ok(p) => p,
@@ -1048,21 +1095,222 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: free-space mode works through `diskutil`/`df`; the whole-disk
+/// `--destructive` mode and the raw-device cache flush stay Linux-only.
+#[cfg(target_os = "macos")]
+mod imp {
+    use std::io;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    pub use super::unix_impl::execute;
+    use super::*;
+    use crate::model::Device;
+
+    /// System mounts whose free space must not be filled without `--size`.
+    const SYSTEM: &[&str] = &[
+        "/",
+        "/System/Volumes/Data",
+        "/System/Volumes/VM",
+        "/System/Volumes/Preboot",
+        "/private/var",
+        "/Users",
+        "/Applications",
+        "/Library",
+    ];
+
+    fn confirm(question: &str) -> bool {
+        eprint!("{question} ");
+        use std::io::Write;
+        let _ = io::stderr().flush();
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes" | "YES")
+    }
+
+    extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+
+    extern "C" fn on_signal(_: i32) {
+        STOP.store(true, Ordering::Relaxed);
+    }
+
+    fn find(arg: &str) -> Option<Device> {
+        crate::enumerate::find_device(&crate::enumerate::list_devices(), arg)
+    }
+
+    /// `df -P -k` as (device, mountpoint) pairs.
+    fn mounted_volumes() -> Vec<(String, String)> {
+        let Ok(out) = Command::new("df").args(["-P", "-k"]).output() else { return Vec::new() };
+        parse_df_mounts(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    fn parse_df_mounts(text: &str) -> Vec<(String, String)> {
+        text.lines()
+            .skip(1)
+            .filter_map(|l| {
+                let f: Vec<&str> = l.split_whitespace().collect();
+                (f.len() >= 6).then(|| (f[0].to_string(), f[5..].join(" ")))
+            })
+            .collect()
+    }
+
+    pub fn plan(d: &Device, dir: Option<String>) -> Result<Plan, String> {
+        let base = match dir {
+            Some(p) => PathBuf::from(p),
+            None => {
+                let prefix = format!("{}s", d.path);
+                mounted_volumes()
+                    .into_iter()
+                    .filter(|(dev, _)| *dev == d.path || dev.starts_with(&prefix))
+                    .filter_map(|(_, mp)| crate::mount::usage(&mp).map(|u| (PathBuf::from(mp), u.avail)))
+                    .max_by_key(|(_, a)| *a)
+                    .map(|(p, _)| p)
+                    .ok_or_else(|| {
+                        format!(
+                            "no mounted filesystem on {}: mount a partition, or use --dir",
+                            d.path
+                        )
+                    })?
+            }
+        };
+        let u = crate::mount::usage(&base.to_string_lossy())
+            .ok_or_else(|| format!("cannot read free space of {}", base.display()))?;
+        let b = base.to_string_lossy();
+        let system = SYSTEM.iter().find(|s| b == **s).map(|s| s.to_string());
+        let reserve = (u.total / 100).max(256 << 20);
+        let room = u.avail.saturating_sub(reserve);
+        let room = room - room % BLOCK as u64;
+        if room < 16 << 20 {
+            return Err(format!(
+                "only {} free on {} (keeping {} in reserve)",
+                human_size_bin(u.avail),
+                base.display(),
+                human_size_bin(reserve)
+            ));
+        }
+        Ok(Plan {
+            device: d.path.clone(),
+            label: d.label(),
+            base: base.to_string_lossy().into_owned(),
+            avail: u.avail,
+            room,
+            system,
+            simulated: None,
+        })
+    }
+
+    fn free_space_run(d: &Device, size: Option<u64>, dir: Option<String>, yes: bool, full: bool, seed: u64) -> i32 {
+        let plan = match plan(d, dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("dcheck: {e}");
+                return 1;
+            }
+        };
+        if let (Some(m), None, false) = (&plan.system, size, full) {
+            eprintln!(
+                "dcheck: {} holds the system ({m}). Filling its free space can stop services\n\
+                 while the test runs. Use --size (e.g. --size 10G), or --full when the Mac is idle.",
+                d.path
+            );
+            return 1;
+        }
+        let total = size.unwrap_or(plan.room).min(plan.room);
+        let total = total - total % BLOCK as u64;
+        eprintln!();
+        for l in plan_lines(&plan, total) {
+            eprintln!("{l}");
+        }
+        if !yes {
+            if !io::stdin().is_terminal() {
+                eprintln!("dcheck: not a terminal; pass --yes to run without confirmation");
+                return 1;
+            }
+            if !confirm("  Continue? [y/N]") {
+                eprintln!("dcheck: cancelled");
+                return 1;
+            }
+        }
+        eprintln!();
+        let mut prog = Progress::new();
+        let result = execute(&plan, total, seed, &mut |ph, d, t| prog.show(ph, d, t));
+        prog.end();
+        match result {
+            Ok((o, cleanup)) => {
+                let code = print_outcome(&format!("{} (free space, test files)", plan.base), &o, false);
+                if let Some(e) = cleanup {
+                    eprintln!("dcheck: {e}");
+                }
+                code
+            }
+            Err(e) => {
+                eprintln!("dcheck: {e}");
+                1
+            }
+        }
+    }
+
+    pub fn run_cmd(arg: &str, size: Option<u64>, dir: Option<String>, yes: bool, destructive: bool, full: bool) -> i32 {
+        if destructive {
+            eprintln!(
+                "dcheck: --destructive is Linux-only (it flushes raw block devices with a Linux ioctl);\n\
+                 run the free-space test instead: dcheck verify {arg} --size 8G"
+            );
+            return 1;
+        }
+        let Some(d) = find(arg) else {
+            eprintln!("dcheck: device '{arg}' not found (try the whole disk, e.g. disk2)");
+            return 1;
+        };
+        unsafe {
+            signal(2, on_signal as extern "C" fn(i32) as usize);
+            signal(15, on_signal as extern "C" fn(i32) as usize);
+        }
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|t| t.as_nanos() as u64)
+            .unwrap_or(1)
+            ^ ((std::process::id() as u64) << 32);
+        free_space_run(&d, size, dir, yes, full, seed)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_df_mounts_and_finds_the_system() {
+            let text = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
+                        /dev/disk3s1s1 1000 400 500 45% /\n\
+                        /dev/disk5s2 2000 100 1900 5% /Volumes/USB\n";
+            let v = parse_df_mounts(text);
+            assert_eq!(v, vec![("/dev/disk3s1s1".to_string(), "/".to_string()), ("/dev/disk5s2".to_string(), "/Volumes/USB".to_string())]);
+            // A whole-disk device matches its partitions by the `diskNs` prefix.
+            assert!(v.iter().any(|(dev, _)| dev.starts_with("/dev/disk5")));
+            assert!(SYSTEM.contains(&"/"));
+            assert!(!SYSTEM.contains(&"/Volumes/USB"));
+        }
+    }
+}
+
+/// Other Unix (FreeBSD) and non-Unix: the free-space test could work, but the
+/// device discovery and cache flush here are not implemented yet.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod imp {
     use super::{OnProgress, Outcome, Plan};
     use crate::model::Device;
 
     pub fn plan(_: &Device, _: Option<String>) -> Result<Plan, String> {
-        Err("verify is Linux-only for now".into())
+        Err("verify is not implemented on this platform yet (Linux and macOS are)".into())
     }
 
     pub fn execute(_: &Plan, _: u64, _: u64, _: OnProgress) -> Result<(Outcome, Option<String>), String> {
-        Err("verify is Linux-only for now".into())
+        Err("verify is not implemented on this platform yet (Linux and macOS are)".into())
     }
 
     pub fn run_cmd(_: &str, _: Option<u64>, _: Option<String>, _: bool, _: bool, _: bool) -> i32 {
-        eprintln!("dcheck: verify is Linux-only for now");
+        eprintln!("dcheck: verify is not implemented on this platform yet (Linux and macOS are)");
         1
     }
 }
@@ -1077,6 +1325,7 @@ mod tests {
 
     fn run_quiet(t: &mut SimTarget, total: u64) -> Outcome {
         let _serial = test_lock();
+        reset_stop(); // another test may have left a stop request behind
         run(t, total, 1, &mut |_, _, _| {})
     }
 

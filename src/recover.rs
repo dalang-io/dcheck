@@ -67,6 +67,11 @@ pub struct Facts {
     pub rotational: Option<bool>,
     /// The device (through any dm / RAID / USB stack) accepts TRIM.
     pub trim: bool,
+    /// The OS trims freed blocks on its own (macOS / APFS): there is no
+    /// `discard` mount option and no `fstrim.timer` to point at.
+    pub trim_automatic: bool,
+    /// Running under macOS, where the system-recovery steps differ.
+    pub macos: bool,
     pub fstrim_timer: Option<Timer>,
     pub used_pct: Option<f64>,
     /// Holds the running system (/, /var, /home …).
@@ -108,6 +113,7 @@ fn fs_family(fs: &str) -> &'static str {
         "btrfs" => "btrfs",
         "zfs" | "zfs_member" => "zfs",
         "f2fs" => "f2fs",
+        "apfs" | "hfs" | "hfsplus" | "hfs+" => "apfs",
         _ => "other",
     }
 }
@@ -130,6 +136,10 @@ fn tools(fs: &str, img: &str, out: &str) -> Vec<String> {
             v.push(format!("btrfs restore -v -i -t <root> {img} {out}"));
         }
         "zfs" => v.push("zfs list -t snapshot   # ZFS: snapshots are the recovery path".into()),
+        "apfs" => {
+            v.push("tmutil listlocalsnapshots /   # APFS local snapshots (Time Machine)".into());
+            v.push(format!("diskutil apfs listSnapshots {img}   # snapshots on the image/device"));
+        }
         _ => {}
     }
     v.push(format!("photorec /log /d {out} {img}   # carving, any filesystem; names are lost"));
@@ -156,6 +166,12 @@ pub fn assess(f: &Facts) -> Assessment {
             f.mount_opts.iter().find(|o| o.starts_with("discard")).map_or("discard", |s| s.as_str())
         ));
         Chance::AlmostNone
+    } else if f.trim_automatic && ssd {
+        reasons.push(format!(
+            "{fs} on macOS: the system trims freed blocks automatically (there is no discard mount or \
+             fstrim.timer to stop), so deleted contents are usually gone — local snapshots are the route"
+        ));
+        Chance::Low
     } else {
         let base = match family {
             "ntfs" | "fat" => {
@@ -176,6 +192,13 @@ pub fn assess(f: &Facts) -> Assessment {
             "zfs" => {
                 reasons.push("ZFS: no undelete tools; snapshots are the way back".into());
                 Chance::Low
+            }
+            "apfs" => {
+                reasons.push(format!(
+                    "{fs}: macOS snapshot filesystem — Time Machine local snapshots / APFS snapshots are \
+                     the way back"
+                ));
+                Chance::Medium
             }
             _ => {
                 reasons.push(format!(
@@ -238,6 +261,7 @@ pub fn assess(f: &Facts) -> Assessment {
     match family {
         "btrfs" => first.push("snapshots: `btrfs subvolume list -s /` (snapper / timeshift)".into()),
         "zfs" => first.push("snapshots: `zfs list -t snapshot`".into()),
+        "apfs" => first.push("snapshots: `tmutil listlocalsnapshots /` / Time Machine".into()),
         _ => first.push("LVM / VM snapshots".into()),
     }
     steps.push(format!("Look first in: {}.", first.join(", ")));
@@ -260,6 +284,11 @@ pub fn assess(f: &Facts) -> Assessment {
         (Some(_), true) if f.virtual_disk => steps.push(
             "Stop writing: this disk runs the VM — after the snapshot, shut the VM down or boot it into the \
              provider's rescue mode; do not keep working on it."
+                .into(),
+        ),
+        (Some(_), true) if f.macos => steps.push(
+            "Stop writing: this disk runs macOS — boot into macOS Recovery (or move the disk to another Mac) \
+             and do not keep working on this Mac."
                 .into(),
         ),
         (Some(_), true) => steps.push(
@@ -393,9 +422,7 @@ impl DiskMap {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub use imp::{disk_name, mount_source};
-pub use imp::{gather, mounted_rw, sample_map};
+pub use imp::{disk_name, gather, mount_source, mounted_rw, sample_map};
 
 /// The assessment as report lines (CLI output, TUI log, clipboard).
 pub fn report_lines(g: &Gathered) -> Vec<String> {
@@ -408,6 +435,7 @@ pub fn report_lines(g: &Gathered) -> Vec<String> {
             _ if f.virtual_disk => "virtual disk",
             (Some(true), _) => "HDD",
             (Some(false), true) => "SSD / flash, TRIM supported",
+            (Some(false), false) if f.trim_automatic => "SSD / flash, TRIM automatic",
             (Some(false), false) => "SSD / flash, no TRIM reaches it",
             (None, _) => "unknown",
         };
@@ -509,8 +537,10 @@ pub fn demo(d: &crate::model::Device) -> (Gathered, DiskMap) {
         mountpoint: Some(if ssd { "/" } else { "/data" }.into()),
         mount_opts: if ssd { vec!["rw".into(), "ssd".into(), "discard=async".into()] } else { vec!["rw".into()] },
         rotational: Some(!ssd),
-        trim: ssd,
-        fstrim_timer: Some(Timer { enabled: true, last: Some("Mon 2026-09-21 00:39:57".into()), next: None }),
+            trim: ssd,
+            trim_automatic: false,
+            macos: false,
+            fstrim_timer: Some(Timer { enabled: true, last: Some("Mon 2026-09-21 00:39:57".into()), next: None }),
         used_pct: Some(if ssd { 38.0 } else { 63.0 }),
         system: ssd,
         encrypted: false,
@@ -682,6 +712,8 @@ mod imp {
             mount_opts: m.map(|m| m.opts.clone()).unwrap_or_default(),
             rotational: queue("rotational").map(|r| r == "1"),
             trim: queue("discard_max_bytes").and_then(|v| v.parse::<u64>().ok()).is_some_and(|v| v > 0),
+            trim_automatic: false,
+            macos: false,
             fstrim_timer: None,
             system,
             encrypted: encrypted(name),
@@ -889,12 +921,214 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: the assessment comes from `mount` / `df` / `diskutil`. The read-only
+/// disk map samples raw block devices, which is a Linux-only path here.
+#[cfg(target_os = "macos")]
+mod imp {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use super::*;
+
+    struct Mount {
+        source: String,
+        target: String,
+        fstype: String,
+        opts: Vec<String>,
+    }
+
+    const SYSTEM: &[&str] = &[
+        "/",
+        "/System/Volumes/Data",
+        "/System/Volumes/VM",
+        "/System/Volumes/Preboot",
+        "/private/var",
+        "/Users",
+        "/Applications",
+        "/Library",
+    ];
+
+    fn mounts() -> Vec<Mount> {
+        let Ok(out) = Command::new("mount").output() else { return Vec::new() };
+        parse_mounts(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// `/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)`.
+    fn parse_mounts(text: &str) -> Vec<Mount> {
+        text.lines()
+            .filter_map(|l| {
+                let (left, right) = l.split_once(" on ")?;
+                let (target, opts) = right.split_once(" (")?;
+                let opts: Vec<String> = opts.trim_end_matches(')').split(',').map(|s| s.trim().to_string()).collect();
+                let fstype = opts.first().cloned().unwrap_or_default();
+                Some(Mount { source: left.trim().to_string(), target: target.trim().to_string(), fstype, opts })
+            })
+            .collect()
+    }
+
+    /// Physical disk name under a macOS device name (`disk3s1s1` -> `disk3`).
+    pub fn disk_name(name: &str) -> String {
+        let n = name.trim_start_matches("/dev/");
+        let Some(rest) = n.strip_prefix("disk") else { return n.to_string() };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            n.to_string()
+        } else {
+            format!("disk{digits}")
+        }
+    }
+
+    /// `diskutil info /dev/<disk>` as key → value.
+    fn diskutil(name: &str) -> HashMap<String, String> {
+        let Ok(out) = Command::new("diskutil").arg("info").arg(format!("/dev/{name}")).output() else {
+            return HashMap::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                Some((k.trim().to_string(), v.trim().to_string()))
+            })
+            .collect()
+    }
+
+    /// Bytes from `diskutil`'s `500.3 GB (500277790720 Bytes)`.
+    fn parse_diskutil_size(v: &str) -> Option<u64> {
+        let (_, b) = v.rsplit_once('(')?;
+        b.split_whitespace().next()?.parse().ok()
+    }
+
+    pub fn mount_source(path: &Path) -> Option<String> {
+        let real = std::fs::canonicalize(path).ok()?;
+        mounts()
+            .into_iter()
+            .filter(|m| m.source.starts_with("/dev/") && real.starts_with(&m.target))
+            .max_by_key(|m| m.target.len())
+            .map(|m| m.source)
+    }
+
+    pub fn mounted_rw(dev: &str) -> Option<String> {
+        let real = std::fs::canonicalize(dev).ok().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| dev.to_string());
+        mounts()
+            .into_iter()
+            .find(|m| {
+                (m.source == real || m.source.starts_with(&real))
+                    && (m.opts.iter().any(|o| o == "rw") || !m.opts.iter().any(|o| o == "read-only"))
+            })
+            .map(|m| m.target)
+    }
+
+    pub fn gather(arg: &str) -> Result<Gathered, String> {
+        let all = mounts();
+        let p = PathBuf::from(arg);
+        let dev = if arg.starts_with("/dev/") {
+            std::fs::canonicalize(&p).map_err(|e| format!("{arg}: {e}"))?.to_string_lossy().into_owned()
+        } else {
+            let real = std::fs::canonicalize(&p).map_err(|e| format!("{arg}: {e}"))?;
+            all.iter()
+                .filter(|m| m.source.starts_with("/dev/") && real.starts_with(&m.target))
+                .max_by_key(|m| m.target.len())
+                .map(|m| m.source.clone())
+                .ok_or_else(|| format!("no mounted filesystem holds {arg}"))?
+        };
+        let name = dev.trim_start_matches("/dev/");
+        let disk = disk_name(name);
+        let m = all.iter().find(|m| m.source == dev);
+        let info = diskutil(&disk);
+        let rotational = info.get("Solid State").map(|v| !v.eq_ignore_ascii_case("yes"));
+        let ssd = rotational == Some(false);
+        let fstype = m.map(|m| m.fstype.clone()).or_else(|| info.get("File System Personality").map(|s| s.to_ascii_lowercase()));
+        let size = m
+            .and_then(|m| crate::mount::usage(&m.target).map(|u| u.total))
+            .or_else(|| info.get("Disk Size").and_then(|v| parse_diskutil_size(v)))
+            .unwrap_or(0);
+        let family = fstype.as_deref().map(fs_family).unwrap_or("other");
+        let system = m.is_some_and(|m| SYSTEM.contains(&m.target.as_str()));
+        let disk_path = format!("/dev/{disk}");
+        let f = Facts {
+            device: dev,
+            disk: disk_path.clone(),
+            size,
+            fstype,
+            mountpoint: m.map(|m| m.target.clone()),
+            mount_opts: m.map(|m| m.opts.clone()).unwrap_or_default(),
+            rotational,
+            trim: false,
+            trim_automatic: ssd && family == "apfs",
+            macos: true,
+            fstrim_timer: None,
+            used_pct: m.and_then(|m| crate::mount::usage(&m.target).map(|u| u.percent)),
+            system,
+            encrypted: info.get("FileVault").is_some_and(|v| v.eq_ignore_ascii_case("yes")),
+            virtual_disk: crate::virt::detect().is_some(),
+        };
+        let a = assess(&f);
+        Ok(Gathered { fss: vec![(f, a)], disk: disk_path })
+    }
+
+    pub fn sample_map(_: &Gathered, _: usize) -> Result<DiskMap, String> {
+        Err("the disk map samples raw block devices and is Linux-only; run `dcheck recover` on Linux for a map".into())
+    }
+
+    pub fn run(arg: &str, map: bool, _cells: usize) -> i32 {
+        let g = match gather(arg) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("dcheck: {e}");
+                return 1;
+            }
+        };
+        println!();
+        for l in report_lines(&g) {
+            println!("{l}");
+        }
+        if map {
+            println!("  (the disk map needs the Linux block-device layer; not available on macOS)");
+            println!();
+        }
+        0
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_mounts_and_disk_names() {
+            let text = "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)\n\
+                        /dev/disk4s1 on /Volumes/Ventoy (exfat, local, nodev, nosuid, noowners, noatime, fskit)\n\
+                        map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)\n";
+            let m = parse_mounts(text);
+            assert_eq!(m.len(), 3);
+            assert_eq!(m[0].fstype, "apfs");
+            assert!(m[0].opts.iter().any(|o| o == "read-only"));
+            assert_eq!(m[1].target, "/Volumes/Ventoy");
+            assert!(!m[1].opts.iter().any(|o| o == "read-only"));
+            assert_eq!(disk_name("/dev/disk3s1s1"), "disk3");
+            assert_eq!(disk_name("disk10s2"), "disk10");
+            assert_eq!(disk_name("disk4"), "disk4");
+            assert_eq!(parse_diskutil_size("500.3 GB (500277790720 Bytes)"), Some(500277790720));
+            assert_eq!(parse_diskutil_size("no size"), None);
+        }
+    }
+}
+
+/// Other platforms: not implemented yet.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod imp {
     use super::{DiskMap, Gathered};
 
+    pub fn disk_name(name: &str) -> String {
+        name.to_string()
+    }
+
+    pub fn mount_source(_: &std::path::Path) -> Option<String> {
+        None
+    }
+
     pub fn gather(_: &str) -> Result<Gathered, String> {
-        Err("recover is Linux-only for now".into())
+        Err("recover is not implemented on this platform yet (Linux and macOS are)".into())
     }
 
     pub fn mounted_rw(_: &str) -> Option<String> {
@@ -902,11 +1136,11 @@ mod imp {
     }
 
     pub fn sample_map(_: &Gathered, _: usize) -> Result<DiskMap, String> {
-        Err("recover is Linux-only for now".into())
+        Err("recover is not implemented on this platform yet (Linux and macOS are)".into())
     }
 
     pub fn run(_: &str, _: bool, _: usize) -> i32 {
-        eprintln!("dcheck: recover is Linux-only for now");
+        eprintln!("dcheck: recover is not implemented on this platform yet (Linux and macOS are)");
         1
     }
 }
@@ -987,6 +1221,23 @@ mod tests {
         assert!(a.steps.iter().any(|s| s.contains("snapshot")));
         assert!(a.steps.iter().any(|s| s.contains("rescue mode")));
         assert!(!a.steps.iter().any(|s| s.contains("live USB")));
+    }
+
+    #[test]
+    fn macos_apfs_ssd_trims_automatically() {
+        // macOS/APFS on an internal SSD: no discard mount, no fstrim.timer.
+        let mut f = facts("apfs", Some(false), false, &["rw", "local", "journaled"]);
+        f.trim_automatic = true;
+        f.system = true;
+        let a = assess(&f);
+        assert_eq!(a.chance, Chance::Low);
+        assert!(a.reasons.iter().any(|r| r.contains("trims freed blocks automatically")), "{:?}", a.reasons);
+        assert!(a.steps.iter().any(|s| s.contains("tmutil")));
+        // An APFS HDD (no automatic trim) points at snapshots instead.
+        let f = facts("apfs", Some(true), false, &["rw"]);
+        let a = assess(&f);
+        assert_eq!(a.chance, Chance::Medium);
+        assert!(a.reasons.iter().any(|r| r.contains("snapshot")), "{:?}", a.reasons);
     }
 
     #[test]

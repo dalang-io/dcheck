@@ -1,4 +1,4 @@
-//! Filesystem usage for mounted partitions (`statvfs` on Linux).
+//! Filesystem usage for mounted partitions (`statvfs` on Linux, `df` elsewhere).
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
@@ -81,8 +81,28 @@ pub fn usage(mount: &str) -> Option<Usage> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn usage(_mount: &str) -> Option<Usage> {
-    None
+pub fn usage(mount: &str) -> Option<Usage> {
+    // macOS and the BSDs have no portably-declared statvfs struct here; `df -P
+    // -k` reports the same counters in 1024-byte blocks.
+    let out = std::process::Command::new("df").args(["-P", "-k", mount]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_df(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse the data line of `df -P -k` (frsize is 1024 bytes).
+#[cfg(not(target_os = "linux"))]
+pub fn parse_df(text: &str) -> Option<Usage> {
+    let line = text.lines().skip(1).find(|l| !l.trim().is_empty())?;
+    let f: Vec<&str> = line.split_whitespace().collect();
+    if f.len() < 4 {
+        return None;
+    }
+    let blocks: u64 = f[1].parse().ok()?;
+    let used: u64 = f[2].parse().ok()?;
+    let avail: u64 = f[3].parse().ok()?;
+    Some(from_blocks(1024, blocks, blocks.saturating_sub(used), avail))
 }
 
 #[cfg(test)]
@@ -97,5 +117,18 @@ mod tests {
         assert_eq!(u.used, 60 * 4096);
         assert_eq!(u.avail, 30 * 4096);
         assert!((u.percent - 66.67).abs() < 0.5); // 60 / (60+30)
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn parses_df_output() {
+        let out = "Filesystem 1024-blocks      Used Available Capacity Mounted on\n\
+                   /dev/disk3s1   1000000    600000    300000      67%   /\n";
+        let u = parse_df(out).unwrap();
+        assert_eq!(u.total, 1_000_000 * 1024);
+        assert_eq!(u.used, 600_000 * 1024);
+        assert_eq!(u.avail, 300_000 * 1024);
+        assert!((u.percent - 66.67).abs() < 0.5);
+        assert!(parse_df("garbage").is_none());
     }
 }
