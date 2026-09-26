@@ -29,20 +29,19 @@ fn root() -> PathBuf {
 
 /// SATA ports whose drive the kernel gave up on (no block device), from the
 /// kernel log. Only for the live system (or `$DCHECK_KMSG` with a fixture).
-fn failed_ata_ports(root: &Path, devices: &[Device]) -> Vec<Device> {
+fn failed_ata_ports(root: &Path, resolved: &[PathBuf]) -> Vec<Device> {
     if root != Path::new("/") && std::env::var_os("DCHECK_KMSG").is_none() {
         return Vec::new();
     }
-    // Ports that do have a working disk: /sys/block/<dev>/device -> .../ataN/...
+    // Ports that do have a working disk: the resolved sysfs paths handed over
+    // by `build_device` (`.../ataN/...`), so the links are not canonicalized
+    // a second time.
     let mut live = std::collections::BTreeSet::new();
-    for d in devices {
-        let link = sys_block(root).join(&d.name).join("device");
-        if let Ok(p) = fs::canonicalize(link) {
-            for comp in p.components() {
-                let c = comp.as_os_str().to_string_lossy();
-                if let Some(n) = c.strip_prefix("ata").and_then(|n| n.parse::<u32>().ok()) {
-                    live.insert(n);
-                }
+    for p in resolved {
+        for comp in p.components() {
+            let c = comp.as_os_str().to_string_lossy();
+            if let Some(n) = c.strip_prefix("ata").and_then(|n| n.parse::<u32>().ok()) {
+                live.insert(n);
             }
         }
     }
@@ -113,15 +112,17 @@ fn list_devices_sysfs() -> Vec<Device> {
         .collect();
     names.sort();
 
+    let mut resolved = Vec::new();
     for name in names {
         if is_ignored(&name) {
             continue;
         }
-        if let Some(dev) = build_device(&root, &name, &mounts) {
+        if let Some((dev, path)) = build_device(&root, &name, &mounts) {
+            resolved.push(path);
             devices.push(dev);
         }
     }
-    devices.extend(failed_ata_ports(&root, &devices));
+    devices.extend(failed_ata_ports(&root, &resolved));
     devices
 }
 
@@ -145,7 +146,7 @@ fn is_ignored(name: &str) -> bool {
     PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
-fn build_device(root: &Path, name: &str, mounts: &Mounts) -> Option<Device> {
+fn build_device(root: &Path, name: &str, mounts: &Mounts) -> Option<(Device, PathBuf)> {
     let base = sys_block(root).join(name);
 
     // /sys/block/<dev>/size is always expressed in 512-byte sectors.
@@ -176,22 +177,25 @@ fn build_device(root: &Path, name: &str, mounts: &Mounts) -> Option<Device> {
     }
     let partitions = read_partitions(name, &base, mounts);
 
-    Some(Device {
-        name: name.to_string(),
-        path: format!("/dev/{name}"),
-        vendor,
-        model,
-        firmware,
-        serial,
-        bus,
-        kind,
-        size_bytes,
-        logical_block_size,
-        removable,
-        smart_status: None,
-        partitions,
-        failure: None,
-    })
+    Some((
+        Device {
+            name: name.to_string(),
+            path: format!("/dev/{name}"),
+            vendor,
+            model,
+            firmware,
+            serial,
+            bus,
+            kind,
+            size_bytes,
+            logical_block_size,
+            removable,
+            smart_status: None,
+            partitions,
+            failure: None,
+        },
+        resolved,
+    ))
 }
 
 fn classify_kind(name: &str, rotational: Option<bool>) -> MediaKind {

@@ -865,3 +865,22 @@ Uji lanjutan (permintaan "test dulu" sebelum rilis):
     sekarang "warn" hanya kalau nilai sudah turun (< 100) atau raw > 0.
   - Chip sensor board (Nuvoton) tidak ter-load → catatan kini menyarankan
     `sensors-detect` / `modprobe nct6775` / `it87`.
+
+## U. Startup / scan: cache SMART tidak lagi dibaca & ditulis per disk
+
+Profil `dcheck check` (strace, 60 disk fixture di .251): 180 `openat` +
+65 `rename` ke `/var/cache/dcheck/smart.json` per scan, padahal `check`
+seharusnya melewati cache. Penyebab: `cache::smart` selalu `load_disk()` +
+`save_disk()` per device, dan write tetap dilakukan meski mode fresh.
+
+- [x] Mode fresh (`check`, `watch`, `prometheus`, `--json`) tidak lagi
+      menulis cache: 180 → 0 `openat`, 65 → 0 `rename`, wall 0.4 dtk →
+      0.02 dtk (fixture 60 disk). Di 3 SAS asli (baca disk mendominasi)
+      tidak ada regresi.
+- [x] Cache disk dimuat **sekali** per proses (`OnceLock`) lalu disimpan di
+      memori, bukan dibaca ulang tiap device/rescan; `openat` snapshot 60
+      device: 240 → 121.
+- [x] `enumerate` tidak lagi `canonicalize` symlink `device` dua kali per
+      disk (sekali di `build_device`, sekali lagi di `failed_ata_ports`).
+- [x] Output tetap byte-identik (dibandingkan base vs baru untuk `check`,
+      `storage`, `--json`, `prometheus`, `ram`, `cpu`, `board`, fixture).

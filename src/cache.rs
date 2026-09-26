@@ -24,7 +24,6 @@ use crate::model::Device;
 use crate::smartctl::SmartData;
 
 static FRESH: AtomicBool = AtomicBool::new(false);
-static DISK_LOCK: Mutex<()> = Mutex::new(());
 
 /// When this process started: in fresh mode only reads made since then are
 /// reused (so one command never reads the same disk twice).
@@ -146,6 +145,14 @@ fn save_disk(entries: &HashMap<String, Entry>) {
     }
 }
 
+/// The on-disk cache, loaded **once** per process. Reading the file per device
+/// made a scan O(devices²) file I/O on slow controllers; the file is only
+/// re-read at startup, then kept in memory and rewritten in place.
+fn disk() -> &'static Mutex<HashMap<String, Entry>> {
+    static DISK: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
+    DISK.get_or_init(|| Mutex::new(load_disk()))
+}
+
 /// SMART for `d`: from the cache when allowed and young enough, otherwise
 /// `read()` (the result is then cached).
 pub fn smart(d: &Device, read: impl FnOnce() -> Option<SmartData>) -> Option<SmartData> {
@@ -159,10 +166,7 @@ pub fn smart(d: &Device, read: impl FnOnce() -> Option<SmartData>) -> Option<Sma
     if !fresh() {
         let ttl = ttl();
         if ttl > 0 {
-            let cached = {
-                let _guard = DISK_LOCK.lock();
-                load_disk().remove(&k)
-            };
+            let cached = disk().lock().ok().and_then(|m| m.get(&k).cloned());
             if let Some(e) = cached.filter(|e| now().saturating_sub(e.at) <= ttl) {
                 if let Ok(mut m) = memory().lock() {
                     m.insert(k, e.clone());
@@ -177,11 +181,13 @@ pub fn smart(d: &Device, read: impl FnOnce() -> Option<SmartData>) -> Option<Sma
         m.insert(k.clone(), entry.clone());
     }
     // Persist real reads (including "no SMART" results) for later runs.
-    if ttl() > 0 && !crate::enumerate::is_demo() {
-        let _guard = DISK_LOCK.lock();
-        let mut disk = load_disk();
-        disk.insert(k, entry);
-        save_disk(&disk);
+    // Monitoring (`check`/`watch`/`prometheus`) and `--json` bypass the disk
+    // cache: they must not rewrite it once per device.
+    if !fresh() && ttl() > 0 && !crate::enumerate::is_demo() {
+        if let Ok(mut on_disk) = disk().lock() {
+            on_disk.insert(k, entry);
+            save_disk(&on_disk);
+        }
     }
     value
 }
@@ -194,13 +200,14 @@ pub fn age(d: &Device) -> Option<u64> {
 
 /// Forget `d` so the next read goes to the hardware (TUI `r`).
 pub fn invalidate(d: &Device) {
+    let k = key(d);
     if let Ok(mut m) = memory().lock() {
-        m.remove(&key(d));
+        m.remove(&k);
     }
-    let _guard = DISK_LOCK.lock();
-    let mut disk = load_disk();
-    if disk.remove(&key(d)).is_some() {
-        save_disk(&disk);
+    if let Ok(mut on_disk) = disk().lock() {
+        if on_disk.remove(&k).is_some() {
+            save_disk(&on_disk);
+        }
     }
 }
 
