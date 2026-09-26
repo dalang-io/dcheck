@@ -1181,19 +1181,13 @@ pub fn smart_unavailable(d: &Device) -> (String, Option<String>) {
     };
     let hint = match d.bus {
         Bus::Mmc => None,
-        Bus::Scsi | Bus::Usb if !smartctl_installed() => Some(
+        Bus::Scsi | Bus::Usb if !smartctl::smartctl_installed() => Some(
             "smartmontools, if installed, is tried as a fallback (it knows vendor passthroughs such as -d sat / megaraid,N)"
                 .to_string(),
         ),
         _ => None,
     };
     (why.into(), hint)
-}
-
-fn smartctl_installed() -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|p| p.join("smartctl").is_file())
-    })
 }
 
 /// Read SMART data and the evaluated health together.

@@ -318,6 +318,11 @@ fn read_smart_impl(device: &str, bus: Option<Bus>) -> Option<SmartData> {
             return Some(parse_smart(&Json::parse(&text)?));
         }
     }
+    // Without smartctl the candidate loop below would spawn a missing binary
+    // once per `-d` type (up to seven for SCSI) for every device.
+    if !smartctl_installed() {
+        return None;
+    }
 
     let mut fallback: Option<SmartData> = None;
     for dtype in d_candidates(bus) {
@@ -331,6 +336,21 @@ fn read_smart_impl(device: &str, bus: Option<Bus>) -> Option<SmartData> {
         }
     }
     fallback
+}
+
+/// Whether `smartctl` is an executable file in any `PATH` entry. Cached: the
+/// answer does not change during a run, and the whole point is to avoid
+/// spawning it when it is absent.
+pub(crate) fn smartctl_installed() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| smartctl_in_path(std::env::var_os("PATH").as_deref()))
+}
+
+/// The pure half of `smartctl_installed`, for tests.
+fn smartctl_in_path(path: Option<&std::ffi::OsStr>) -> bool {
+    path.is_some_and(|paths| {
+        std::env::split_paths(paths).any(|p| p.join("smartctl").is_file())
+    })
 }
 
 fn run_smartctl(device: &str, dtype: Option<&str>) -> Option<SmartData> {
@@ -799,6 +819,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn smartctl_presence_follows_path() {
+        let dir = std::env::temp_dir().join(format!("dcheck-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.as_os_str();
+        assert!(!smartctl_in_path(Some(path)));
+        std::fs::write(dir.join("smartctl"), b"#!/bin/sh\n").unwrap();
+        assert!(smartctl_in_path(Some(path)));
+        assert!(!smartctl_in_path(None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn smart_data_json_roundtrip() {
