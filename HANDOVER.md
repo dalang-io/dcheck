@@ -1,8 +1,9 @@
 # dcheck — Handover
 
-Status per 2026-09-25 · versi rilis **0.5.0** (tag `dcheck-v0.5.0`, master
-`07e97fd` + commit dokumentasi ini).
-Catatan kerja rinci per topik ada di [`TODO.md`](TODO.md) (bagian A–S), dan
+Status per 2026-09-27 · versi rilis **0.5.1** (tag `dcheck-v0.5.1`, master
+`2e33627`). Commit terakhir menyelesaikan NTFS `$ATTRIBUTE_LIST` + nama ntfs3,
+`undelete --carve --free`, dan recover/verify di macOS.
+Catatan kerja rinci per topik ada di [`TODO.md`](TODO.md) (bagian A–U), dan
 desain lengkapnya di [`../docs/DCHECK.md`](../docs/DCHECK.md).
 
 ## 1. Apa itu dcheck
@@ -68,7 +69,7 @@ Landing page: <https://wayang.dalang.io/apps/dcheck.html> (juga ada bagian di
 | `ipmi.rs` | IPMI native via ioctl `/dev/ipmi0`: Device ID, SDR (full/compact, konversi M/B/exp), reading, SEL; parser teruji |
 | `virt.rs` | Deteksi VM (DMI, /sys/hypervisor, flag cpu) dan disk virtual |
 | `update.rs` | Self-update dari `https://wayang.dalang.io/dcheck` |
-| `tui/` | `mod.rs` (state/event; RECOVERY `u` dan CAPACITY TEST `v`), `views.rs` (layar), `widgets.rs`, `theme.rs`, `snapshot.rs` (render layar ke SVG), `tests.rs` |
+| `tui/` | `mod.rs` (state/event; RECOVERY `u` → DELETED FILES `d` dan CAPACITY TEST `v`), `views.rs` (layar), `widgets.rs`, `theme.rs`, `snapshot.rs` (render layar ke SVG), `tests.rs` |
 | `config.rs` | `~/.config/dcheck/config.json` (dibaca sekali per proses) |
 
 Fixture test: `testdata/*.json` (output smartctl asli: SAS Toshiba, SATA
@@ -81,7 +82,7 @@ Linux dari macOS memakai `zig cc`.
 
 ```bash
 cd dcheck
-cargo test                                  # ±145 unit test (termasuk render TUI)
+cargo test                                  # ±170 unit test (termasuk render TUI)
 cargo clippy --all-targets                  # harus bersih
 cargo clippy --target x86_64-unknown-linux-musl --all-targets   # modul linux
 ../scripts/test-dcheck.sh                   # e2e fixture (40 assertion)
@@ -223,10 +224,15 @@ minta langsung ke pemilik.
    **Temuan terbuka di lapangan:** R630 .177 PSU 1 dan .251 PSU 2 tanpa AC
    (redundansi hilang) — pemilik perlu cek kabel / PDU.
 6. **Kecil:**
-   - `dcheck storage` (daftar teks) masih menampilkan HEALTH "?".
+   - ~~`dcheck storage` (daftar teks) masih menampilkan HEALTH "?"~~ →
+     daftar kini membaca health (paralel, lewat cache) dan menampilkan
+     verdict; `-` hanya bila health sengaja tidak dibaca (petunjuk "device
+     not found").
    - `storage --bench` masih MB/s (verify sudah Mbps, TODO R).
-   - `prometheus` belum mengekspor metrik baru (design life, overdue, grown
-     defects, phy errors, suhu lifetime, port gagal).
+   - ~~`prometheus` belum mengekspor metrik baru~~ → sekarang juga
+     mengekspor design life / sisa jam / overdue, reallocated (grown
+     defects), pending, uncorrectable, CRC, suhu lifetime min/max, phy
+     errors (jumlah), dan `dcheck_device_failed`.
    - Error ATA runtime per port (sudah dihitung di `kernlog::PortState.errors`)
      belum ditampilkan untuk disk yang masih hidup.
 7. **Verifikasi hardware yang belum pernah dilakukan:** aarch64 di hardware asli (baru dicek dengan `file`), USB

@@ -430,7 +430,7 @@ fn storage_cmd(args: &[String], session_demo: bool) -> i32 {
                     );
                 } else {
                     eprintln!("dcheck: device '{sel}' not found. Attached devices:");
-                    report::print_list(&devices);
+                    report::print_list_basic(&devices);
                 }
                 return 1;
             }

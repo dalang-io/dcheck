@@ -67,13 +67,17 @@ sample devices (`dcheck demo`).</sub>
 
 ---
 
-> Status: **M1–M13** — storage (enumeration; native SMART ATA/NVMe/SCSI; ATA
-> attributes+thresholds; self-test + read-only bench; link speed), RAM (usage,
-> ECC, and SMBIOS modules via `dmidecode` → raw `/sys/firmware/dmi` → `lshw`:
-> vendor/type DDR4/DDR5/speed/slots; DDR5 temperature),
-> CPU (vendor/model/topology/clock/cache/temp/load), mounted-partition usage
+> Status: **0.5.x** — storage (enumeration; native SMART ATA/NVMe/SCSI; ATA
+> attributes+thresholds; self-test + read-only bench; link speed; HDD design
+> life; authenticity), RAM (usage, ECC, and SMBIOS modules via `dmidecode` →
+> raw `/sys/firmware/dmi` → `lshw`: vendor/type DDR4/DDR5/speed/slots; DDR5
+> temperature; EDAC cross-check),
+> CPU (vendor/model/topology/clock/cache/temp/load), motherboard (DMI, BIOS,
+> PCIe/USB, hwmon, native IPMI + BMC event log), mounted-partition usage
 > meters, terminal UI, `--json`,
-> `prometheus`, monitoring/alerts, `smartctl` enrichment, TBW overrides, and a
+> `prometheus`, monitoring/alerts, `smartctl` enrichment, TBW overrides,
+> `verify` (fake-capacity), `recover` (deleted-file chance + disk map),
+> `undelete` (NTFS/FAT32/exFAT + carving), VM awareness, and a
 > FreeBSD/macOS backend.
 > Full plan: [`docs/DCHECK.md`](docs/DCHECK.md). License: [MIT](LICENSE).
 
@@ -124,7 +128,7 @@ dcheck ram | cpu        # memory / CPU report (or --json)
 dcheck board            # motherboard: maker, BIOS, PCIe/USB, sensors, BMC log (--json)
 dcheck verify <dev>     # prove the real capacity (fake drives; writes test files)
 dcheck recover <dev|path>  # deleted a file? chance, steps, disk map (read-only)
-dcheck undelete <dev|image> [--to DIR]  # list / recover deleted files (NTFS, FAT32, exFAT; --carve)
+dcheck undelete <dev|image> [--to DIR]  # list / recover deleted files (NTFS, FAT32, exFAT; --carve [--free])
 dcheck update           # self-update from wayang.dalang.io (--check, --force)
 dcheck snapshot DIR     # every TUI screen as SVG (--demo, --mask-serials, --host, --tools DEV)
 dcheck --version
@@ -216,7 +220,10 @@ mounted and unmounted partitions, and ignored virtual devices.
 
 - Data is sourced from `/sys` and `/proc` (no `lsblk`/`udev` dependency), so it
   runs inside a minimal WayangOS initramfs.
-- Read-only: never writes to block devices.
+- Read-only by default: SMART, `recover` and `undelete` scans never write to
+  the source. Only `verify` writes (test files in free space, or the raw
+  device with `--destructive`), and `undelete` writes recovered files to a
+  destination on another disk.
 - Native SMART via raw ioctl is the baseline; `smartctl -j` is optional
   enrichment (M2).
 

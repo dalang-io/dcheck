@@ -81,7 +81,8 @@ pub fn mount_summary(dev: &Device) -> String {
     "-".to_string()
 }
 
-/// Print the storage device table.
+/// Print the storage device table, reading each device's health so the HEALTH
+/// column matches the report instead of a bare `?`.
 pub fn print_list(devices: &[Device]) {
     if devices.is_empty() {
         eprintln!("No block devices found.");
@@ -89,21 +90,56 @@ pub fn print_list(devices: &[Device]) {
         return;
     }
 
-    println!(
-        "{:<14} {:<5} {:<7} {:<28} {:>10}  {:<9} MOUNT",
+    let metrics = metrics_all(devices);
+    for line in list_lines(devices, &metrics) {
+        println!("{line}");
+    }
+}
+
+/// Print the table without reading health (HEALTH shows `-`). Used for the
+/// "device not found" hint so a typo does not read every disk.
+pub fn print_list_basic(devices: &[Device]) {
+    for line in list_lines(devices, &[]) {
+        println!("{line}");
+    }
+}
+
+/// The storage table as lines. `metrics[i]` is `metrics_all`'s result for
+/// `devices[i]`; a missing entry leaves the HEALTH cell as `-` (not read).
+pub fn list_lines(
+    devices: &[Device],
+    metrics: &[Option<(smartctl::SmartData, health::Health)>],
+) -> Vec<String> {
+    let mut out = vec![format!(
+        "{:<14} {:<5} {:<7} {:<28} {:>10}  {:<11} MOUNT",
         "DEVICE", "TYPE", "BUS", "MODEL", "CAPACITY", "HEALTH"
-    );
-    for d in devices {
-        println!(
-            "{:<14} {:<5} {:<7} {:<28} {:>10}  {:<9} {}",
+    )];
+    for (i, d) in devices.iter().enumerate() {
+        let health = metrics
+            .get(i)
+            .map(|m| list_health_label(d, m.as_ref()))
+            .unwrap_or_else(|| "-".to_string());
+        out.push(format!(
+            "{:<14} {:<5} {:<7} {:<28} {:>10}  {:<11} {}",
             d.path,
             crate::virt::kind_label(d),
             d.bus.to_string(),
             truncate(&d.label(), 28),
             human_size(d.size_bytes),
-            "?",
+            health,
             truncate(&mount_summary(d), 24),
-        );
+        ));
+    }
+    out
+}
+
+/// HEALTH cell: the evaluated verdict, `VIRTUAL` for a virtual disk that has
+/// no SMART, `UNKNOWN` when the SMART data could not be read.
+fn list_health_label(d: &Device, m: Option<&(smartctl::SmartData, health::Health)>) -> String {
+    match m {
+        Some((_, h)) => h.verdict.label().to_string(),
+        None if crate::virt::is_virtual_disk(d) => "VIRTUAL".to_string(),
+        None => "UNKNOWN".to_string(),
     }
 }
 
@@ -1201,6 +1237,15 @@ pub fn device_metrics(d: &Device) -> Option<(smartctl::SmartData, health::Health
 /// Prometheus text exposition for all devices.
 pub fn prometheus(devices: &[Device]) -> String {
     let all = metrics_all(devices);
+    prometheus_lines(devices, &all)
+}
+
+/// Prometheus text from already-read metrics (see `metrics_all`), so the
+/// output can be tested without touching hardware.
+pub fn prometheus_lines(
+    devices: &[Device],
+    all: &[Option<(smartctl::SmartData, health::Health)>],
+) -> String {
     let mut out = String::new();
     out.push_str("# HELP dcheck_capacity_bytes Device capacity in bytes.\n");
     out.push_str("# TYPE dcheck_capacity_bytes gauge\n");
@@ -1209,7 +1254,7 @@ pub fn prometheus(devices: &[Device]) -> String {
     }
     out.push_str("# HELP dcheck_health_severity 0=ok 1=unknown 2=monitor 3=backup/replace.\n");
     out.push_str("# TYPE dcheck_health_severity gauge\n");
-    for (d, m) in devices.iter().zip(&all) {
+    for (d, m) in devices.iter().zip(all) {
         if m.is_none() && crate::virt::is_virtual_disk(d) {
             out.push_str(&metric("dcheck_health_severity", &d.path, Some("VIRTUAL"), 0.0));
         }
@@ -1223,19 +1268,50 @@ pub fn prometheus(devices: &[Device]) -> String {
             out.push_str(&metric("dcheck_health_severity", &d.path, Some(h.verdict.label()), sev));
         }
     }
+    // A port the kernel gave up on (no /dev/sdX) still has to show up.
+    out.push_str("# TYPE dcheck_device_failed gauge\n");
+    for d in devices {
+        let v = if d.failure.is_some() { 1.0 } else { 0.0 };
+        out.push_str(&metric("dcheck_device_failed", &d.path, None, v));
+    }
     type Gauge = (&'static str, fn(&smartctl::SmartData) -> Option<f64>);
     let gauges: &[Gauge] = &[
         ("dcheck_temperature_celsius", |s| s.temperature_c.map(|v| v as f64)),
+        ("dcheck_temperature_min_celsius", |s| s.temp_min_c.map(|v| v as f64)),
+        ("dcheck_temperature_max_celsius", |s| s.temp_max_c.map(|v| v as f64)),
         ("dcheck_power_on_hours", |s| s.power_on_hours.map(|v| v as f64)),
         ("dcheck_wear_used_percent", |s| s.life_percent.map(|p| (100u64.saturating_sub(p)) as f64)),
         ("dcheck_written_bytes", |s| s.bytes_written().map(|v| v as f64)),
         ("dcheck_media_errors", |s| s.media_errors.map(|v| v as f64)),
+        ("dcheck_reallocated_sectors", |s| s.reallocated.map(|v| v as f64)),
+        ("dcheck_pending_sectors", |s| s.pending.map(|v| v as f64)),
+        ("dcheck_uncorrectable_sectors", |s| s.uncorrectable.map(|v| v as f64)),
+        ("dcheck_crc_errors", |s| s.crc_errors.map(|v| v as f64)),
+        ("dcheck_sas_phy_errors", |s| s.phy_errors.map(|p| p.iter().sum::<u64>() as f64)),
     ];
     for (name, get) in gauges {
         out.push_str(&format!("# TYPE {name} gauge\n"));
-        for (d, m) in devices.iter().zip(&all) {
+        for (d, m) in devices.iter().zip(all) {
             if let Some((s, _)) = m {
                 if let Some(v) = get(s) {
+                    out.push_str(&metric(name, &d.path, None, v));
+                }
+            }
+        }
+    }
+    // Life estimate: design-life use, remaining hours and how far past the
+    // rated life a drive is, all from `health::evaluate`.
+    type HealthGauge = (&'static str, fn(&health::Health) -> Option<f64>);
+    let health_gauges: &[HealthGauge] = &[
+        ("dcheck_design_life_used_percent", |h| h.design_life_used.map(|v| v as f64)),
+        ("dcheck_life_remaining_hours", |h| h.remaining_poh.map(|v| v as f64)),
+        ("dcheck_life_overdue_hours", |h| h.overdue_poh.map(|v| v as f64)),
+    ];
+    for (name, get) in health_gauges {
+        out.push_str(&format!("# TYPE {name} gauge\n"));
+        for (d, m) in devices.iter().zip(all) {
+            if let Some((_, h)) = m {
+                if let Some(v) = get(h) {
                     out.push_str(&metric(name, &d.path, None, v));
                 }
             }
@@ -1628,5 +1704,108 @@ mod tests {
         assert!(s.contains("\"device\":\"/dev/sda\""));
         assert!(s.contains("\"capacity_bytes\":500000000000"));
         assert!(s.contains("\"bus\":\"SATA\""));
+    }
+
+    fn list_dev() -> Device {
+        Device {
+            name: "sda".into(),
+            path: "/dev/sda".into(),
+            vendor: Some("ATA".into()),
+            model: Some("SSD 1TB".into()),
+            firmware: None,
+            serial: None,
+            bus: crate::model::Bus::Sata,
+            kind: crate::model::MediaKind::Ssd,
+            size_bytes: 500_000_000_000,
+            logical_block_size: 512,
+            removable: false,
+            smart_status: None,
+            partitions: vec![],
+            failure: None,
+        }
+    }
+
+    #[test]
+    fn list_health_column_shows_verdicts_not_question_marks() {
+        let a = list_dev();
+        let mut b = list_dev();
+        b.name = "sdb".into();
+        b.path = "/dev/sdb".into();
+        let smart = smartctl::SmartData {
+            passed: Some(true),
+            power_on_hours: Some(1000),
+            ..Default::default()
+        };
+        let h = health::evaluate(&a, &smart);
+        let metrics = vec![Some((smart, h)), None];
+
+        let lines = list_lines(&[a, b], &metrics);
+        assert!(lines[0].contains("HEALTH"));
+        assert!(lines[1].contains("OK"), "{}", lines[1]);
+        assert!(!lines[1].contains(" ? "), "{}", lines[1]);
+        // No SMART for a non-virtual disk: UNKNOWN, not a bare "?".
+        assert!(lines[2].contains("UNKNOWN"), "{}", lines[2]);
+    }
+
+    #[test]
+    fn list_health_column_is_dash_when_not_read() {
+        let d = list_dev();
+        let lines = list_lines(std::slice::from_ref(&d), &[]);
+        assert!(lines[1].contains(" - "), "{}", lines[1]);
+    }
+
+    #[test]
+    fn list_health_marks_virtual_disks_without_smart() {
+        let mut d = list_dev();
+        d.name = "vda".into();
+        d.path = "/dev/vda".into();
+        d.vendor = Some("0x1af4".into());
+        d.bus = crate::model::Bus::Virtio;
+        d.kind = crate::model::MediaKind::Unknown;
+        assert_eq!(list_health_label(&d, None), "VIRTUAL");
+    }
+
+    #[test]
+    fn prometheus_exports_life_endurance_and_failure_metrics() {
+        let mut d = list_dev();
+        // An HDD so the design-life estimate (power-on hours vs 5 y) applies.
+        d.kind = crate::model::MediaKind::Hdd;
+        let smart = smartctl::SmartData {
+            passed: Some(true),
+            power_on_hours: Some(21_900),
+            rotation_rate: Some(7200),
+            reallocated: Some(3),
+            pending: Some(1),
+            uncorrectable: Some(2),
+            crc_errors: Some(7),
+            temp_min_c: Some(22),
+            temp_max_c: Some(39),
+            phy_errors: Some([1, 2, 3, 4]),
+            ..Default::default()
+        };
+        let h = health::evaluate(&d, &smart);
+        let text = prometheus_lines(std::slice::from_ref(&d), &[Some((smart, h))]);
+        for needle in [
+            "dcheck_health_severity{device=\"/dev/sda\",verdict=\"BACK UP NOW\"} 3",
+            "dcheck_device_failed{device=\"/dev/sda\"} 0",
+            "dcheck_reallocated_sectors{device=\"/dev/sda\"} 3",
+            "dcheck_pending_sectors{device=\"/dev/sda\"} 1",
+            "dcheck_uncorrectable_sectors{device=\"/dev/sda\"} 2",
+            "dcheck_crc_errors{device=\"/dev/sda\"} 7",
+            "dcheck_temperature_min_celsius{device=\"/dev/sda\"} 22",
+            "dcheck_temperature_max_celsius{device=\"/dev/sda\"} 39",
+            "dcheck_sas_phy_errors{device=\"/dev/sda\"} 10",
+            // 21,900 h of a 43,800 h (5 y @24/7) HDD design life.
+            "dcheck_design_life_used_percent{device=\"/dev/sda\"} 50",
+            "dcheck_life_remaining_hours{device=\"/dev/sda\"} 21900",
+        ] {
+            assert!(text.contains(needle), "missing {needle} in:\n{text}");
+        }
+
+        // A dead port shows as failed even though no SMART was read.
+        let mut failed = list_dev();
+        failed.failure = Some("reset failed, giving up".into());
+        let text = prometheus_lines(std::slice::from_ref(&failed), &[None]);
+        assert!(text.contains("dcheck_device_failed{device=\"/dev/sda\"} 1"), "{text}");
     }
 }

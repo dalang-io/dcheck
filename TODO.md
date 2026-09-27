@@ -247,8 +247,9 @@ Tugas:
       10.0.0.251 Seagate×2 + Toshiba, 10.0.0.177 Samsung SM863a + Toshiba×4
       → CONSISTENT
 - [ ] Seagate FARM: bandingkan POH FARM vs SMART
-- [ ] `--verify-capacity` (non-destruktif di free space; destruktif hanya
-      dengan flag + konfirmasi, tidak pernah default)
+- [x] `--verify-capacity` (non-destruktif di free space; destruktif hanya
+      dengan flag + konfirmasi, tidak pernah default) — selesai sebagai
+      `dcheck verify` / `dcheck storage <dev> --verify-capacity` (lihat N)
 
 ### 2. RAM health
 
@@ -312,11 +313,20 @@ Tugas:
 - [ ] `--stress` opsional
 
 ### Temuan kecil lain (dari pengambilan screenshot)
-- [ ] `dcheck storage` (daftar teks) menampilkan HEALTH "?" untuk semua
+- [x] `dcheck storage` (daftar teks) menampilkan HEALTH "?" untuk semua
       disk. Daftar tidak membaca SMART; TUI dan `check` sudah benar.
       Seharusnya daftar ikut membaca health (atau diberi keterangan).
-- [ ] `dcheck prometheus` belum mengekspor metrik baru (design life, overdue,
+      → daftar kini membaca health paralel (lewat cache) dan menampilkan
+      verdict; `-` hanya pada petunjuk "device not found" (health sengaja
+      tidak dibaca).
+- [x] `dcheck prometheus` belum mengekspor metrik baru (design life, overdue,
       grown defects, uncorrected, phy errors, suhu lifetime).
+      → ditambah `dcheck_design_life_used_percent`,
+      `dcheck_life_remaining_hours`, `dcheck_life_overdue_hours`,
+      `dcheck_reallocated_sectors` (grown defects), `dcheck_pending_sectors`,
+      `dcheck_uncorrectable_sectors`, `dcheck_crc_errors`,
+      `dcheck_temperature_{min,max}_celsius`, `dcheck_sas_phy_errors`
+      (jumlah), dan `dcheck_device_failed` (port yang tidak pernah siap).
 
 ## H. CPU "MONITOR" tanpa alasan (10.0.0.177)
 
@@ -908,3 +918,29 @@ seharusnya melewati cache. Penyebab: `cache::smart` selalu `load_disk()` +
       disk (sekali di `build_device`, sekali lagi di `failed_ata_ports`).
 - [x] Output tetap byte-identik (dibandingkan base vs baru untuk `check`,
       `storage`, `--json`, `prometheus`, `ram`, `cpu`, `board`, fixture).
+
+## V. Daftar storage + metrik prometheus (console gaps)
+
+Fokus pada celah konsol yang bisa dikerjakan & diverifikasi tanpa hardware
+khusus (unit test murni). TUI carve `--free` sengaja belum dikerjakan
+(lihat bawah).
+
+- [x] `dcheck storage` (daftar teks) kini membaca health paralel lewat
+      `metrics_all` (cache tetap dipakai) dan menampilkan verdict, bukan "?".
+      Virtual disk tanpa SMART → `VIRTUAL`, SMART tidak terbaca → `UNKNOWN`.
+      Petunjuk "device not found" memakai `print_list_basic` (kolom `-`)
+      supaya salah ketik tidak membaca semua disk.
+      Fungsi murni `report::list_lines(devices, metrics)` supaya bisa diuji
+      tanpa disk; unit test untuk verdict, `-`, dan `VIRTUAL`.
+- [x] `prometheus` mengekspor metrik baru: design life / sisa jam / overdue,
+      reallocated (grown defects), pending, uncorrectable, CRC, suhu lifetime
+      min/max, phy errors (jumlah) dan `dcheck_device_failed`.
+      `prometheus_lines(devices, metrics)` dipisah dari pembacaan hardware
+      supaya bisa diuji; unit test mengecek metrik sehat dan port mati.
+- [x] Docs: README (status + "read-only by default" + `--carve [--free]`),
+      HANDOVER (versi 0.5.1, peta TUI, jumlah test, item kecil),
+      TODO G (`--verify-capacity` sudah selesai sebagai `verify`).
+- Belum: TUI untuk `--carve --free` dan macOS `--carve` dari TUI (fitur UI
+  baru, bukan celah kecil); exFAT/FAT32 terfragmentasi; FreeBSD; Seagate
+  FARM POH vs SMART.
+
