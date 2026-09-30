@@ -4,6 +4,12 @@
 //! Storage health (native SMART) and the TUI arrive in later milestones.
 //! See `docs/DCHECK.md`.
 
+// Edition 2024 stabilises `let` chains, so `clippy::collapsible_if` now flags
+// the deliberately-nested `if let` / `if` pairs throughout this crate and wants
+// them rewritten as `&&` chains. That is a pure style lint; rewriting ~50 sites
+// would add a large, behaviour-neutral diff, so the suggestion is allowed.
+#![allow(clippy::collapsible_if)]
+
 mod authenticity;
 mod bench;
 mod board;
