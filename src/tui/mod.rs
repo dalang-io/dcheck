@@ -793,7 +793,7 @@ fn reload_devices(demo: bool) -> Vec<Device> {
 fn hostname() -> String {
     #[cfg(unix)]
     {
-        extern "C" {
+        unsafe extern "C" {
             fn gethostname(name: *mut std::ffi::c_char, len: usize) -> std::ffi::c_int;
         }
         let mut buf = [0u8; 256];

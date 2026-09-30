@@ -39,7 +39,7 @@ fn main() {
     // on a closed pipe (Rust ignores SIGPIPE by default).
     #[cfg(unix)]
     unsafe {
-        extern "C" {
+        unsafe extern "C" {
             fn signal(signum: i32, handler: usize) -> usize;
         }
         signal(13, 0); // SIGPIPE → SIG_DFL
@@ -179,7 +179,9 @@ fn run_tui(
     });
     if plain {
         // Report text (section headers, meters) follows the same glyph set.
-        std::env::set_var("DCHECK_PLAIN", "1");
+        // SAFETY: called once during single-threaded startup, before any
+        // worker threads exist that could observe the environment.
+        unsafe { std::env::set_var("DCHECK_PLAIN", "1") };
     }
     let splash = config::load().splash && std::env::var_os("DCHECK_NO_SPLASH").is_none();
     let demo = force_demo || std::env::var_os("DCHECK_DEMO").is_some();

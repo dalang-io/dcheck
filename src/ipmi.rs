@@ -369,7 +369,7 @@ mod dev {
         revents: i16,
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
         fn poll(fds: *mut PollFd, n: u64, timeout: i32) -> i32;
     }

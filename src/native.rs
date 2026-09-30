@@ -595,7 +595,7 @@ pub fn parse_sat_smart_status(sense: &[u8]) -> Option<bool> {
 pub fn is_root() -> bool {
     #[cfg(unix)]
     {
-        extern "C" {
+        unsafe extern "C" {
             fn geteuid() -> u32;
         }
         unsafe { geteuid() == 0 }
@@ -623,7 +623,7 @@ mod linux {
     type CInt = i32;
     type CULong = u64;
 
-    extern "C" {
+    unsafe extern "C" {
         fn ioctl(fd: CInt, request: CULong, ...) -> CInt;
     }
 

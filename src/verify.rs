@@ -684,7 +684,7 @@ mod unix_impl {
     use super::*;
 
     #[cfg(target_os = "linux")]
-    extern "C" {
+    unsafe extern "C" {
         fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> i32;
         fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
     }
@@ -695,14 +695,14 @@ mod unix_impl {
 
     // macOS has no posix_fadvise; F_NOCACHE makes reads go to the device.
     #[cfg(target_os = "macos")]
-    extern "C" {
+    unsafe extern "C" {
         fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     }
     #[cfg(target_os = "macos")]
     const F_NOCACHE: i32 = 48;
 
     #[cfg(target_os = "freebsd")]
-    extern "C" {
+    unsafe extern "C" {
         fn posix_fadvise(fd: i32, offset: i64, len: i64, advice: i32) -> i32;
     }
     #[cfg(target_os = "freebsd")]
@@ -814,7 +814,7 @@ mod imp {
         io::stdin().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes" | "YES")
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn signal(signum: i32, handler: usize) -> usize;
     }
     const O_EXCL: i32 = 0o200;
@@ -1127,7 +1127,7 @@ mod imp {
         io::stdin().read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes" | "YES")
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn signal(signum: i32, handler: usize) -> usize;
     }
 

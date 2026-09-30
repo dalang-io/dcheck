@@ -54,7 +54,7 @@ pub fn usage(mount: &str) -> Option<Usage> {
         __f_spare: [u32; 6],
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn statvfs(path: *const std::ffi::c_char, buf: *mut Statvfs) -> i32;
     }
 
