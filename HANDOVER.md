@@ -6,6 +6,16 @@ Status per 2026-09-27 · versi rilis **0.5.1** (tag `dcheck-v0.5.1`, master
 Catatan kerja rinci per topik ada di [`TODO.md`](TODO.md) (bagian A–U), dan
 desain lengkapnya di [`../docs/DCHECK.md`](../docs/DCHECK.md).
 
+## 2026-09-30 — standardisasi Rust (edition 2024)
+
+- **Rust 1.98.1 + edition 2024** (`rust-toolchain.toml` + `rust-version = "1.98.1"`).
+  Perubahan kode yang diperlukan: `unsafe extern "C"` (wajib di edition 2024) dan
+  `std::env::set_var` dibungkus `unsafe`; lint `collapsible_if` (muncul karena
+  let-chains edition 2024) di-**`allow`** di crate — **tanpa** rewrite (~50 situs).
+- HEAD `12d4601`; **belum di-tag ulang** (tag rilis terakhir tetap
+  `dcheck-v0.5.1`). Verifikasi: 169 test + clippy bersih di rustc 1.98.1.
+- Catatan: baseline `cargo fmt` repo ini memang belum rapi (bukan dari perubahan ini).
+
 ## 1. Apa itu dcheck
 
 Tool CLI/TUI untuk mengecek kesehatan **storage** (SAS, SATA, NVMe), **RAM**,
