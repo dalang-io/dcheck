@@ -268,7 +268,8 @@ impl<'a> Parser<'a> {
                             if self.pos + 4 > self.bytes.len() {
                                 return None;
                             }
-                            let hex = std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).ok()?;
+                            let hex =
+                                std::str::from_utf8(&self.bytes[self.pos..self.pos + 4]).ok()?;
                             let cp = u32::from_str_radix(hex, 16).ok()?;
                             self.pos += 4;
                             out.push(char::from_u32(cp).unwrap_or('\u{fffd}'));
@@ -325,7 +326,10 @@ mod tests {
     fn parses_nested_values() {
         let j = Json::parse(r#"{"a":1,"b":[true,null,"x"],"c":{"d":-2.5}}"#).unwrap();
         assert_eq!(j.get("a").and_then(Json::as_u64), Some(1));
-        assert_eq!(j.get("c").and_then(|c| c.get("d")).and_then(Json::as_f64), Some(-2.5));
+        assert_eq!(
+            j.get("c").and_then(|c| c.get("d")).and_then(Json::as_f64),
+            Some(-2.5)
+        );
         let arr = j.get("b").and_then(Json::as_array).unwrap();
         assert_eq!(arr.len(), 3);
         assert_eq!(arr[0].as_bool(), Some(true));

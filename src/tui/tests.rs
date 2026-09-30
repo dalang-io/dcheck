@@ -1,10 +1,10 @@
 //! Render tests against ratatui's in-memory `TestBackend` using demo data.
 
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Color;
-use ratatui::Terminal;
 
 use super::*;
 use crate::ram::RamModule;
@@ -56,10 +56,20 @@ fn cpu() -> CpuInfo {
     }
 }
 
+/// A theme with an explicit palette, for the render assertions that check
+/// exact colours. `--plain` is a `Flags` bit now, not a field on the App.
+fn theme_of(pal: Palette, plain: bool) -> Theme {
+    Theme {
+        app: DCHECK,
+        palette: pal,
+        ui: Ui { plain },
+    }
+}
+
 /// App with every background read already completed (no threads).
 fn app(pal: Palette, plain: bool) -> App {
     let devices = crate::enumerate::demo_devices();
-    let mut a = App::new(devices, pal, Ui { plain }, true, false, false);
+    let mut a = App::new(devices, theme_of(pal, plain), true, false, false);
     a.health = a
         .devices
         .iter()
@@ -109,7 +119,10 @@ fn text(buf: &Buffer) -> String {
 fn screens() -> Vec<(Screen, &'static [&'static str])> {
     vec![
         (Screen::Menu, &["MODULES", "STORAGE", "PROCESSOR"]),
-        (Screen::Storage, &["STORAGE ARRAY", "/dev/nvme0n1", "BACK UP NOW"]),
+        (
+            Screen::Storage,
+            &["STORAGE ARRAY", "/dev/nvme0n1", "BACK UP NOW"],
+        ),
         (Screen::Ram, &["MEMORY BANK", "USED", "SLOTS"]),
         (Screen::Cpu, &["PROCESSOR CORE", "LOAD", "THREADS"]),
         (Screen::Board, &["MOTHERBOARD", "PowerEdge R630", "MONITOR"]),
@@ -147,7 +160,13 @@ fn report_shows_life_and_endurance_gauges() {
 
 #[test]
 fn menu_cards_follow_selection() {
-    for (i, title) in [(0, "STORAGE ARRAY"), (1, "MEMORY BANK"), (2, "PROCESSOR"), (3, "MOTHERBOARD"), (4, "SESSION")] {
+    for (i, title) in [
+        (0, "STORAGE ARRAY"),
+        (1, "MEMORY BANK"),
+        (2, "PROCESSOR"),
+        (3, "MOTHERBOARD"),
+        (4, "SESSION"),
+    ] {
         let mut a = app(neon(), false);
         a.menu.select(Some(i));
         let t = text(&render(&mut a, 120, 30));
@@ -169,7 +188,13 @@ fn splash_and_help_render() {
 #[test]
 fn tiny_terminals_do_not_panic() {
     for (w, h) in [(1, 1), (20, 6), (40, 10), (59, 15)] {
-        for screen in [Screen::Splash, Screen::Menu, Screen::Storage, Screen::Ram, Screen::Cpu] {
+        for screen in [
+            Screen::Splash,
+            Screen::Menu,
+            Screen::Storage,
+            Screen::Ram,
+            Screen::Cpu,
+        ] {
             let mut a = app(neon(), false);
             a.screen = screen;
             a.help = true;
@@ -213,8 +238,16 @@ fn no_color_uses_no_colors() {
         a.screen = screen;
         let buf = render(&mut a, 120, 30);
         for cell in buf.content() {
-            assert!(matches!(cell.fg, Color::Reset), "{screen:?} fg {:?}", cell.fg);
-            assert!(matches!(cell.bg, Color::Reset), "{screen:?} bg {:?}", cell.bg);
+            assert!(
+                matches!(cell.fg, Color::Reset),
+                "{screen:?} fg {:?}",
+                cell.fg
+            );
+            assert!(
+                matches!(cell.bg, Color::Reset),
+                "{screen:?} bg {:?}",
+                cell.bg
+            );
         }
     }
 }
@@ -332,14 +365,21 @@ fn recover_screen_shows_chance_steps_and_map() {
         assert_eq!(a.screen, Screen::Recover);
         wait(&mut a, |a| a.recover_map.is_some());
         let t = text(&render(&mut a, 140, 44));
-        for e in ["RECOVERY", chance, "DISK MAP", "free space still holds old data", "WHAT TO DO", "ddrescue"] {
+        for e in [
+            "RECOVERY",
+            chance,
+            "DISK MAP",
+            "free space still holds old data",
+            "WHAT TO DO",
+            "ddrescue",
+        ] {
             assert!(t.contains(e), "row {row} missing {e:?}:\n{t}");
         }
         // Small terminals and plain mode still render.
         let _ = render(&mut a, 60, 16);
         // Plain mode: the panels are ASCII (the log text follows
         // DCHECK_PLAIN, which `--plain` sets for the whole process).
-        a.ui = Ui { plain: true };
+        a.theme.ui = Ui { plain: true };
         let t = text(&render(&mut a, 100, 40));
         assert_ascii(t.split("WHAT TO DO").next().unwrap());
         handle_key(&mut a, KeyCode::Esc);
@@ -390,7 +430,11 @@ fn verify_can_be_stopped_and_refuses_dead_ports() {
     handle_key(&mut a, KeyCode::Char('y'));
     handle_key(&mut a, KeyCode::Esc);
     wait(&mut a, |a| matches!(a.verify, VerifyState::Done { .. }));
-    assert!(a.verify_lines.iter().any(|l| l.contains("ABORTED")), "{:?}", a.verify_lines);
+    assert!(
+        a.verify_lines.iter().any(|l| l.contains("ABORTED")),
+        "{:?}",
+        a.verify_lines
+    );
     // The unresponsive SATA port has nothing to test.
     let dead = 4;
     a.devices[dead].failure = Some("link reset failed".into());
@@ -415,7 +459,14 @@ fn undelete_screen_demo_flow_with_block_map() {
     assert_eq!(a.screen, Screen::Undelete);
     wait(&mut a, |a| a.undel.is_some());
     let t = text(&render(&mut a, 140, 44));
-    for e in ["BLOCK MAP", "deleted:", "intact", "Laporan Keuangan 2026.xlsx", "PARTLY REUSED", "OVERWRITTEN"] {
+    for e in [
+        "BLOCK MAP",
+        "deleted:",
+        "intact",
+        "Laporan Keuangan 2026.xlsx",
+        "PARTLY REUSED",
+        "OVERWRITTEN",
+    ] {
         assert!(t.contains(e), "missing {e:?}:\n{t}");
     }
     // Mark all intact files, open the prompt, type a folder, write (demo).
@@ -430,7 +481,10 @@ fn undelete_screen_demo_flow_with_block_map() {
     assert!(!handle_key(&mut a, KeyCode::Char('q')));
     handle_key(&mut a, KeyCode::Backspace);
     let t = text(&render(&mut a, 140, 44));
-    assert!(t.contains("RECOVER 4 FILE(S) TO") && t.contains("/mnt/usb/rescue"), "{t}");
+    assert!(
+        t.contains("RECOVER 4 FILE(S) TO") && t.contains("/mnt/usb/rescue"),
+        "{t}"
+    );
     handle_key(&mut a, KeyCode::Enter);
     assert_eq!(a.undel_log.len(), 4);
     assert!(a.undel_log[0].contains("nothing written"));
@@ -440,7 +494,7 @@ fn undelete_screen_demo_flow_with_block_map() {
     assert!(a.undel_log.is_empty());
     // Small and plain terminals.
     let _ = render(&mut a, 60, 16);
-    a.ui = Ui { plain: true };
+    a.theme.ui = Ui { plain: true };
     assert_ascii(&text(&render(&mut a, 120, 40)));
     handle_key(&mut a, KeyCode::Esc);
     assert_eq!(a.screen, Screen::Recover);
@@ -452,9 +506,20 @@ fn undelete_screen_recovers_real_files_from_an_image() {
     let dir = std::env::temp_dir().join(format!("dcheck-tui-undel-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let img = dir.join("fat32.img");
-    let text_img = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/undelete/fat32.sparse")).unwrap();
+    let text_img = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/testdata/undelete/fat32.sparse"
+    ))
+    .unwrap();
     let mut lines = text_img.lines();
-    let size: usize = lines.next().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
+    let size: usize = lines
+        .next()
+        .unwrap()
+        .rsplit(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
     let mut bytes = vec![0u8; size];
     for l in lines {
         let p: Vec<&str> = l.split(' ').collect();
@@ -483,10 +548,17 @@ fn undelete_screen_recovers_real_files_from_an_image() {
     }
     handle_key(&mut a, KeyCode::Enter);
     wait(&mut a, |a| !a.undel_log.is_empty());
-    assert!(a.undel_log.iter().all(|l| l.starts_with("recovered")), "{:?}", a.undel_log);
+    assert!(
+        a.undel_log.iter().all(|l| l.starts_with("recovered")),
+        "{:?}",
+        a.undel_log
+    );
     let big: Vec<u8> = (0..20000u32).map(|i| ((i * 7 + 3) % 251) as u8).collect();
     assert_eq!(std::fs::read(out.join("big.bin")).unwrap(), big);
-    assert!(out.join("Dokumen Kantor/Laporan Keuangan 2026.xlsx").exists());
+    assert!(
+        out.join("Dokumen Kantor/Laporan Keuangan 2026.xlsx")
+            .exists()
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -501,7 +573,16 @@ fn motherboard_menu_item_card_and_screen() {
     handle_key(&mut a, KeyCode::Enter);
     assert_eq!(a.screen, Screen::Board);
     let t = text(&render(&mut a, 140, 44));
-    for e in ["BIOS", "2.19.0", "BMC", "POWER", "ALERTS", "redundancy lost", "BOARD LOG", "EVENT LOG"] {
+    for e in [
+        "BIOS",
+        "2.19.0",
+        "BMC",
+        "POWER",
+        "ALERTS",
+        "redundancy lost",
+        "BOARD LOG",
+        "EVENT LOG",
+    ] {
         assert!(t.contains(e), "screen missing {e:?}:\n{t}");
     }
     handle_key(&mut a, KeyCode::Esc);
@@ -509,7 +590,7 @@ fn motherboard_menu_item_card_and_screen() {
     handle_key(&mut a, KeyCode::Char('4'));
     assert_eq!(a.screen, Screen::Board);
     // Plain mode stays ASCII on the card and the screen.
-    a.ui = Ui { plain: true };
+    a.theme.ui = Ui { plain: true };
     let t = text(&render(&mut a, 140, 44));
     assert_ascii(t.split("BOARD LOG").next().unwrap());
     a.screen = Screen::Menu;

@@ -84,7 +84,9 @@ pub struct Facts {
 
 impl Facts {
     fn discard_mount(&self) -> bool {
-        self.mount_opts.iter().any(|o| o == "discard" || o.starts_with("discard="))
+        self.mount_opts
+            .iter()
+            .any(|o| o == "discard" || o.starts_with("discard="))
             && !self.mount_opts.iter().any(|o| o == "nodiscard")
     }
 
@@ -142,7 +144,9 @@ fn tools(fs: &str, img: &str, out: &str) -> Vec<String> {
         }
         _ => {}
     }
-    v.push(format!("photorec /log /d {out} {img}   # carving, any filesystem; names are lost"));
+    v.push(format!(
+        "photorec /log /d {out} {img}   # carving, any filesystem; names are lost"
+    ));
     v
 }
 
@@ -175,7 +179,9 @@ pub fn assess(f: &Facts) -> Assessment {
     } else {
         let base = match family {
             "ntfs" | "fat" => {
-                reasons.push(format!("{fs}: a deleted file's record usually keeps its name and location"));
+                reasons.push(format!(
+                    "{fs}: a deleted file's record usually keeps its name and location"
+                ));
                 Chance::High
             }
             "ext" | "xfs" => {
@@ -186,7 +192,9 @@ pub fn assess(f: &Facts) -> Assessment {
                 Chance::Medium
             }
             "btrfs" => {
-                reasons.push("btrfs: copy-on-write — older tree roots can still point at the file".into());
+                reasons.push(
+                    "btrfs: copy-on-write — older tree roots can still point at the file".into(),
+                );
                 Chance::Medium
             }
             "zfs" => {
@@ -220,9 +228,11 @@ pub fn assess(f: &Facts) -> Assessment {
                     base.lower()
                 }
                 _ => {
-                    reasons.push("SSD with TRIM, but no discard mount and no fstrim timer: free blocks are \
+                    reasons.push(
+                        "SSD with TRIM, but no discard mount and no fstrim timer: free blocks are \
                                   only erased when someone runs fstrim"
-                        .into());
+                            .into(),
+                    );
                     base
                 }
             }
@@ -236,39 +246,56 @@ pub fn assess(f: &Facts) -> Assessment {
                               deleted blocks are not erased"
                     .into());
             } else if f.rotational == Some(true) {
-                reasons.push("HDD: old contents stay on the platters until they are overwritten".into());
+                reasons.push(
+                    "HDD: old contents stay on the platters until they are overwritten".into(),
+                );
             }
             base
         }
     };
     if let Some(u) = f.used_pct {
         if u >= 90.0 && chance > Chance::AlmostNone {
-            reasons.push(format!("{u:.0}% full: new writes quickly reuse the freed blocks"));
+            reasons.push(format!(
+                "{u:.0}% full: new writes quickly reuse the freed blocks"
+            ));
             chance = chance.lower();
         }
     }
     if f.system && !f.read_only() && chance > Chance::AlmostNone {
-        reasons.push("system disk, mounted read-write: logs and services keep writing to it every minute".into());
+        reasons.push(
+            "system disk, mounted read-write: logs and services keep writing to it every minute"
+                .into(),
+        );
     }
     if f.encrypted {
-        reasons.push("encrypted (dm-crypt): recover from the unlocked /dev/mapper device, not the raw disk".into());
+        reasons.push(
+            "encrypted (dm-crypt): recover from the unlocked /dev/mapper device, not the raw disk"
+                .into(),
+        );
     }
 
     // Steps.
     let mut steps = Vec::new();
     let mnt = f.mountpoint.as_deref();
-    let mut first = vec!["Trash (~/.local/share/Trash, file manager deletes)".to_string(), "backups".to_string()];
+    let mut first = vec![
+        "Trash (~/.local/share/Trash, file manager deletes)".to_string(),
+        "backups".to_string(),
+    ];
     match family {
-        "btrfs" => first.push("snapshots: `btrfs subvolume list -s /` (snapper / timeshift)".into()),
+        "btrfs" => {
+            first.push("snapshots: `btrfs subvolume list -s /` (snapper / timeshift)".into())
+        }
         "zfs" => first.push("snapshots: `zfs list -t snapshot`".into()),
         "apfs" => first.push("snapshots: `tmutil listlocalsnapshots /` / Time Machine".into()),
         _ => first.push("LVM / VM snapshots".into()),
     }
     steps.push(format!("Look first in: {}.", first.join(", ")));
     if chance == Chance::AlmostNone {
-        steps.push("Carving may still find fragments that were not trimmed yet; the steps below are the \
+        steps.push(
+            "Carving may still find fragments that were not trimmed yet; the steps below are the \
                     only chance, so do them now or not at all."
-            .into());
+                .into(),
+        );
     }
     if (ssd || f.virtual_disk) && f.trim && f.fstrim_timer.as_ref().is_some_and(|t| t.enabled) {
         steps.push("Stop TRIM now: `sudo systemctl stop fstrim.timer`.".into());
@@ -314,8 +341,15 @@ pub fn assess(f: &Facts) -> Assessment {
         t.push_str(&line);
     }
     steps.push(t);
-    steps.push("Never install tools on, or save recovered files to, the disk you are recovering from.".into());
-    Assessment { chance, reasons, steps }
+    steps.push(
+        "Never install tools on, or save recovered files to, the disk you are recovering from."
+            .into(),
+    );
+    Assessment {
+        chance,
+        reasons,
+        steps,
+    }
 }
 
 /// `systemctl show` output (`Key=value` lines).
@@ -396,7 +430,12 @@ pub struct DiskMap {
 pub type FsRange = (String, Option<(u64, u64)>, Option<f64>);
 
 impl DiskMap {
-    pub fn build(disk: &str, cell_bytes: u64, cells: Vec<Vec<Sample>>, ranges: &[FsRange]) -> DiskMap {
+    pub fn build(
+        disk: &str,
+        cell_bytes: u64,
+        cells: Vec<Vec<Sample>>,
+        ranges: &[FsRange],
+    ) -> DiskMap {
         let mut cell_fs = vec![None; cells.len()];
         let mut shares = Vec::new();
         for (fi, (dev, range, used)) in ranges.iter().enumerate() {
@@ -415,10 +454,20 @@ impl DiskMap {
             }
             if n > 0 {
                 let d = data as f64 / n as f64;
-                shares.push((dev.clone(), d, used.and_then(|u| free_space_residue(d, u / 100.0))));
+                shares.push((
+                    dev.clone(),
+                    d,
+                    used.and_then(|u| free_space_residue(d, u / 100.0)),
+                ));
             }
         }
-        DiskMap { disk: disk.to_string(), cell_bytes, cells, cell_fs, shares }
+        DiskMap {
+            disk: disk.to_string(),
+            cell_bytes,
+            cells,
+            cell_fs,
+            shares,
+        }
     }
 }
 
@@ -430,7 +479,10 @@ pub fn report_lines(g: &Gathered) -> Vec<String> {
     let dot = if plain { "-" } else { "·" };
     let mut out = Vec::new();
     for (f, a) in &g.fss {
-        out.push(crate::report::section(&format!("RECOVERY {dot} {}", f.device)));
+        out.push(crate::report::section(&format!(
+            "RECOVERY {dot} {}",
+            f.device
+        )));
         let media = match (f.rotational, f.trim) {
             _ if f.virtual_disk => "virtual disk",
             (Some(true), _) => "HDD",
@@ -443,7 +495,10 @@ pub fn report_lines(g: &Gathered) -> Vec<String> {
         out.push(format!(
             "  Filesystem   : {}{}",
             f.fstype.as_deref().unwrap_or("unknown"),
-            f.mountpoint.as_deref().map(|m| format!(" on {m}")).unwrap_or_else(|| " (not mounted)".into())
+            f.mountpoint
+                .as_deref()
+                .map(|m| format!(" on {m}"))
+                .unwrap_or_else(|| " (not mounted)".into())
         ));
         let relevant: Vec<&str> = f
             .mount_opts
@@ -461,7 +516,10 @@ pub fn report_lines(g: &Gathered) -> Vec<String> {
             out.push(format!(
                 "  fstrim.timer : {}{}",
                 if t.enabled { "enabled" } else { "disabled" },
-                t.last.as_deref().map(|l| format!(" (last run {l})")).unwrap_or_default()
+                t.last
+                    .as_deref()
+                    .map(|l| format!(" (last run {l})"))
+                    .unwrap_or_default()
             ));
         }
         out.push(format!("  Chance       : {}", a.chance.label()));
@@ -486,7 +544,11 @@ pub fn report_lines(g: &Gathered) -> Vec<String> {
 
 /// The disk map as text (CLI).
 pub fn map_lines(m: &DiskMap, plain: bool) -> Vec<String> {
-    let mut out = vec![crate::report::section(&format!("DISK MAP {} {}", if plain { "-" } else { "·" }, m.disk))];
+    let mut out = vec![crate::report::section(&format!(
+        "DISK MAP {} {}",
+        if plain { "-" } else { "·" },
+        m.disk
+    ))];
     let mut row = String::new();
     for (i, samples) in m.cells.iter().enumerate() {
         if i % 64 == 0 {
@@ -506,7 +568,10 @@ pub fn map_lines(m: &DiskMap, plain: bool) -> Vec<String> {
         human_size_bin(m.cell_bytes)
     ));
     out.extend(share_lines(m));
-    out.push("  Sampled, not exhaustive: a fragment can survive in an \"empty\" cell and vice versa.".into());
+    out.push(
+        "  Sampled, not exhaustive: a fragment can survive in an \"empty\" cell and vice versa."
+            .into(),
+    );
     out
 }
 
@@ -517,7 +582,10 @@ pub fn share_lines(m: &DiskMap) -> Vec<String> {
         .map(|(dev, d, r)| {
             let mut line = format!("  {dev:<12} data in {:.0}% of samples", d * 100.0);
             if let Some(r) = r {
-                line.push_str(&format!(" → ~{:.0}% of the free space still holds old data", r * 100.0));
+                line.push_str(&format!(
+                    " → ~{:.0}% of the free space still holds old data",
+                    r * 100.0
+                ));
             }
             line
         })
@@ -528,19 +596,35 @@ pub fn share_lines(m: &DiskMap) -> Vec<String> {
 /// an NVMe) an SSD mounted with discard.
 pub fn demo(d: &crate::model::Device) -> (Gathered, DiskMap) {
     let ssd = d.kind != crate::model::MediaKind::Hdd;
-    let part = format!("{}{}", d.path, if d.name.starts_with("nvme") { "p2" } else { "2" });
+    let part = format!(
+        "{}{}",
+        d.path,
+        if d.name.starts_with("nvme") {
+            "p2"
+        } else {
+            "2"
+        }
+    );
     let f = Facts {
         device: part.clone(),
         disk: d.path.clone(),
         size: d.size_bytes * 95 / 100,
         fstype: Some(if ssd { "btrfs" } else { "ext4" }.into()),
         mountpoint: Some(if ssd { "/" } else { "/data" }.into()),
-        mount_opts: if ssd { vec!["rw".into(), "ssd".into(), "discard=async".into()] } else { vec!["rw".into()] },
+        mount_opts: if ssd {
+            vec!["rw".into(), "ssd".into(), "discard=async".into()]
+        } else {
+            vec!["rw".into()]
+        },
         rotational: Some(!ssd),
-            trim: ssd,
-            trim_automatic: false,
-            macos: false,
-            fstrim_timer: Some(Timer { enabled: true, last: Some("Mon 2026-09-21 00:39:57".into()), next: None }),
+        trim: ssd,
+        trim_automatic: false,
+        macos: false,
+        fstrim_timer: Some(Timer {
+            enabled: true,
+            last: Some("Mon 2026-09-21 00:39:57".into()),
+            next: None,
+        }),
         used_pct: Some(if ssd { 38.0 } else { 63.0 }),
         system: ssd,
         encrypted: false,
@@ -555,12 +639,12 @@ pub fn demo(d: &crate::model::Device) -> (Gathered, DiskMap) {
             (0..4)
                 .map(|k| {
                     let h = (i * 7 + k * 13) % 100;
-                    let data = if ssd { i < cells * 2 / 5 && h < 92 } else { i > 10 && h < 96 };
-                    if data {
-                        Sample::Data
+                    let data = if ssd {
+                        i < cells * 2 / 5 && h < 92
                     } else {
-                        Sample::Empty
-                    }
+                        i > 10 && h < 96
+                    };
+                    if data { Sample::Data } else { Sample::Empty }
                 })
                 .collect()
         })
@@ -568,7 +652,13 @@ pub fn demo(d: &crate::model::Device) -> (Gathered, DiskMap) {
     let start = d.size_bytes - f.size;
     let ranges = vec![(part, Some((start, d.size_bytes)), f.used_pct)];
     let map = DiskMap::build(&d.path, cell_bytes, grid, &ranges);
-    (Gathered { fss: vec![(f, a)], disk: d.path.clone() }, map)
+    (
+        Gathered {
+            fss: vec![(f, a)],
+            disk: d.path.clone(),
+        },
+        map,
+    )
 }
 
 pub fn cmd(args: &[String]) -> i32 {
@@ -593,7 +683,11 @@ pub fn cmd(args: &[String]) -> i32 {
             "--no-map" => map = false,
             "--cells" => {
                 i += 1;
-                match args.get(i).and_then(|v| v.parse().ok()).filter(|n: &usize| (16..=8192).contains(n)) {
+                match args
+                    .get(i)
+                    .and_then(|v| v.parse().ok())
+                    .filter(|n: &usize| (16..=8192).contains(n))
+                {
                     Some(n) => cells = n,
                     None => {
                         eprintln!("dcheck: --cells needs a number between 16 and 8192");
@@ -625,7 +719,17 @@ mod imp {
 
     use super::*;
 
-    const SYSTEM: &[&str] = &["/", "/boot", "/boot/efi", "/usr", "/var", "/home", "/srv", "/opt", "/tmp"];
+    const SYSTEM: &[&str] = &[
+        "/",
+        "/boot",
+        "/boot/efi",
+        "/usr",
+        "/var",
+        "/home",
+        "/srv",
+        "/opt",
+        "/tmp",
+    ];
 
     struct Mount {
         source: String,
@@ -648,13 +752,20 @@ mod imp {
                 let source = fs::canonicalize(source)
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_else(|_| source.to_string());
-                Some(Mount { source, target, fstype, opts })
+                Some(Mount {
+                    source,
+                    target,
+                    fstype,
+                    opts,
+                })
             })
             .collect()
     }
 
     fn sys(name: &str, f: &str) -> Option<String> {
-        fs::read_to_string(format!("/sys/class/block/{name}/{f}")).ok().map(|s| s.trim().to_string())
+        fs::read_to_string(format!("/sys/class/block/{name}/{f}"))
+            .ok()
+            .map(|s| s.trim().to_string())
     }
 
     /// Parent disk of a partition, or the physical disk under a dm device.
@@ -681,37 +792,66 @@ mod imp {
             return true;
         }
         fs::read_dir(format!("/sys/class/block/{name}/slaves"))
-            .map(|r| r.flatten().any(|e| encrypted(&e.file_name().to_string_lossy())))
+            .map(|r| {
+                r.flatten()
+                    .any(|e| encrypted(&e.file_name().to_string_lossy()))
+            })
             .unwrap_or(false)
     }
 
     fn timer() -> Option<Timer> {
-        let enabled = Command::new("systemctl").args(["is-enabled", "fstrim.timer"]).output().ok()?;
-        let show = Command::new("systemctl")
-            .args(["show", "fstrim.timer", "-p", "LastTriggerUSec", "-p", "NextElapseUSecRealtime"])
+        let enabled = Command::new("systemctl")
+            .args(["is-enabled", "fstrim.timer"])
             .output()
             .ok()?;
-        Some(parse_timer(&String::from_utf8_lossy(&show.stdout), &String::from_utf8_lossy(&enabled.stdout)))
+        let show = Command::new("systemctl")
+            .args([
+                "show",
+                "fstrim.timer",
+                "-p",
+                "LastTriggerUSec",
+                "-p",
+                "NextElapseUSecRealtime",
+            ])
+            .output()
+            .ok()?;
+        Some(parse_timer(
+            &String::from_utf8_lossy(&show.stdout),
+            &String::from_utf8_lossy(&enabled.stdout),
+        ))
     }
 
     fn facts(name: &str, all: &[Mount], fstype: Option<String>) -> Facts {
         let dev = format!("/dev/{name}");
         let disk = disk_of(name);
         let m = all.iter().find(|m| m.source == dev);
-        let queue = |f: &str| sys(name, &format!("queue/{f}")).or_else(|| sys(&disk, &format!("queue/{f}")));
+        let queue = |f: &str| {
+            sys(name, &format!("queue/{f}")).or_else(|| sys(&disk, &format!("queue/{f}")))
+        };
         let mountpoint = m.map(|m| m.target.clone());
         // Every mount of this device (btrfs subvolumes mount the same one).
-        let system = all.iter().filter(|x| x.source == dev).any(|x| SYSTEM.contains(&x.target.as_str()));
+        let system = all
+            .iter()
+            .filter(|x| x.source == dev)
+            .any(|x| SYSTEM.contains(&x.target.as_str()));
         Facts {
             device: dev,
             disk: format!("/dev/{disk}"),
-            size: sys(name, "size").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0) * 512,
+            size: sys(name, "size")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
+                * 512,
             fstype: m.map(|m| m.fstype.clone()).or(fstype),
-            used_pct: mountpoint.as_deref().and_then(crate::mount::usage).map(|u| u.percent),
+            used_pct: mountpoint
+                .as_deref()
+                .and_then(crate::mount::usage)
+                .map(|u| u.percent),
             mountpoint,
             mount_opts: m.map(|m| m.opts.clone()).unwrap_or_default(),
             rotational: queue("rotational").map(|r| r == "1"),
-            trim: queue("discard_max_bytes").and_then(|v| v.parse::<u64>().ok()).is_some_and(|v| v > 0),
+            trim: queue("discard_max_bytes")
+                .and_then(|v| v.parse::<u64>().ok())
+                .is_some_and(|v| v > 0),
             trim_automatic: false,
             macos: false,
             fstrim_timer: None,
@@ -731,7 +871,9 @@ mod imp {
     fn signature(name: &str) -> Option<String> {
         use std::io::Read;
         let mut buf = vec![0u8; 72 << 10];
-        let n = fs::File::open(format!("/dev/{name}")).and_then(|mut f| f.read(&mut buf)).ok()?;
+        let n = fs::File::open(format!("/dev/{name}"))
+            .and_then(|mut f| f.read(&mut buf))
+            .ok()?;
         let sig = crate::verify::data_signatures(&buf[..n]);
         let first = sig.into_iter().find(|s| !s.contains("partition table"))?;
         Some(
@@ -756,7 +898,10 @@ mod imp {
         let p = PathBuf::from(arg);
         if arg.starts_with("/dev/") {
             let real = fs::canonicalize(&p).map_err(|e| format!("{arg}: {e}"))?;
-            let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = real
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             if !Path::new(&format!("/sys/class/block/{name}")).exists() {
                 return Err(format!("{arg} is not a block device"));
             }
@@ -777,11 +922,18 @@ mod imp {
             let mut out = Vec::new();
             for part in parts {
                 let holders: Vec<String> = fs::read_dir(format!("/sys/class/block/{part}/holders"))
-                    .map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                    .map(|r| {
+                        r.flatten()
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if holders.is_empty() {
                     let sig = signature(&part);
-                    let size = sys(&part, "size").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0) * 512;
+                    let size = sys(&part, "size")
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0)
+                        * 512;
                     let mounted = all.iter().any(|m| m.source == format!("/dev/{part}"));
                     // Skip BIOS-boot / reserved partitions: tiny and no filesystem.
                     if sig.is_some() || mounted || size >= 64 << 20 {
@@ -824,7 +976,10 @@ mod imp {
         let real = fs::canonicalize(dev).ok()?.to_string_lossy().into_owned();
         mounts()
             .into_iter()
-            .find(|m| (m.source == real || m.source.starts_with(&real)) && m.opts.iter().any(|o| o == "rw"))
+            .find(|m| {
+                (m.source == real || m.source.starts_with(&real))
+                    && m.opts.iter().any(|o| o == "rw")
+            })
             .map(|m| m.target)
     }
 
@@ -843,13 +998,19 @@ mod imp {
                 (f, a)
             })
             .collect();
-        Ok(Gathered { fss, disk: format!("/dev/{disk}") })
+        Ok(Gathered {
+            fss,
+            disk: format!("/dev/{disk}"),
+        })
     }
 
     /// Sample the disk (root; read-only) into `cells` cells.
     pub fn sample_map(g: &Gathered, cells: usize) -> Result<DiskMap, String> {
         let disk = g.disk.trim_start_matches("/dev/");
-        let size = sys(disk, "size").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0) * 512;
+        let size = sys(disk, "size")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 512;
         let f = fs::File::open(&g.disk).map_err(|e| format!("cannot open {}: {e}", g.disk))?;
         if size < (cells as u64) * 4096 * 4 {
             return Err("disk too small to map".into());
@@ -875,7 +1036,9 @@ mod imp {
             .iter()
             .map(|(f, _)| {
                 let name = f.device.trim_start_matches("/dev/");
-                let start = sys(name, "start").and_then(|s| s.parse::<u64>().ok()).map(|s| s * 512);
+                let start = sys(name, "start")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(|s| s * 512);
                 (f.device.clone(), start.map(|s| (s, s + f.size)), f.used_pct)
             })
             .collect::<Vec<_>>();
@@ -913,7 +1076,10 @@ mod imp {
                     Err(e) => println!("  (disk map: {e})"),
                 }
             } else {
-                println!("  (run as root for a map of where {} still holds data)", g.disk);
+                println!(
+                    "  (run as root for a map of where {} still holds data)",
+                    g.disk
+                );
             }
             println!();
         }
@@ -950,7 +1116,9 @@ mod imp {
     ];
 
     fn mounts() -> Vec<Mount> {
-        let Ok(out) = Command::new("mount").output() else { return Vec::new() };
+        let Ok(out) = Command::new("mount").output() else {
+            return Vec::new();
+        };
         parse_mounts(&String::from_utf8_lossy(&out.stdout))
     }
 
@@ -960,9 +1128,18 @@ mod imp {
             .filter_map(|l| {
                 let (left, right) = l.split_once(" on ")?;
                 let (target, opts) = right.split_once(" (")?;
-                let opts: Vec<String> = opts.trim_end_matches(')').split(',').map(|s| s.trim().to_string()).collect();
+                let opts: Vec<String> = opts
+                    .trim_end_matches(')')
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
                 let fstype = opts.first().cloned().unwrap_or_default();
-                Some(Mount { source: left.trim().to_string(), target: target.trim().to_string(), fstype, opts })
+                Some(Mount {
+                    source: left.trim().to_string(),
+                    target: target.trim().to_string(),
+                    fstype,
+                    opts,
+                })
             })
             .collect()
     }
@@ -970,7 +1147,9 @@ mod imp {
     /// Physical disk name under a macOS device name (`disk3s1s1` -> `disk3`).
     pub fn disk_name(name: &str) -> String {
         let n = name.trim_start_matches("/dev/");
-        let Some(rest) = n.strip_prefix("disk") else { return n.to_string() };
+        let Some(rest) = n.strip_prefix("disk") else {
+            return n.to_string();
+        };
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         if digits.is_empty() {
             n.to_string()
@@ -981,7 +1160,11 @@ mod imp {
 
     /// `diskutil info /dev/<disk>` as key → value.
     fn diskutil(name: &str) -> HashMap<String, String> {
-        let Ok(out) = Command::new("diskutil").arg("info").arg(format!("/dev/{name}")).output() else {
+        let Ok(out) = Command::new("diskutil")
+            .arg("info")
+            .arg(format!("/dev/{name}"))
+            .output()
+        else {
             return HashMap::new();
         };
         String::from_utf8_lossy(&out.stdout)
@@ -1009,12 +1192,16 @@ mod imp {
     }
 
     pub fn mounted_rw(dev: &str) -> Option<String> {
-        let real = std::fs::canonicalize(dev).ok().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| dev.to_string());
+        let real = std::fs::canonicalize(dev)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| dev.to_string());
         mounts()
             .into_iter()
             .find(|m| {
                 (m.source == real || m.source.starts_with(&real))
-                    && (m.opts.iter().any(|o| o == "rw") || !m.opts.iter().any(|o| o == "read-only"))
+                    && (m.opts.iter().any(|o| o == "rw")
+                        || !m.opts.iter().any(|o| o == "read-only"))
             })
             .map(|m| m.target)
     }
@@ -1023,7 +1210,10 @@ mod imp {
         let all = mounts();
         let p = PathBuf::from(arg);
         let dev = if arg.starts_with("/dev/") {
-            std::fs::canonicalize(&p).map_err(|e| format!("{arg}: {e}"))?.to_string_lossy().into_owned()
+            std::fs::canonicalize(&p)
+                .map_err(|e| format!("{arg}: {e}"))?
+                .to_string_lossy()
+                .into_owned()
         } else {
             let real = std::fs::canonicalize(&p).map_err(|e| format!("{arg}: {e}"))?;
             all.iter()
@@ -1036,9 +1226,14 @@ mod imp {
         let disk = disk_name(name);
         let m = all.iter().find(|m| m.source == dev);
         let info = diskutil(&disk);
-        let rotational = info.get("Solid State").map(|v| !v.eq_ignore_ascii_case("yes"));
+        let rotational = info
+            .get("Solid State")
+            .map(|v| !v.eq_ignore_ascii_case("yes"));
         let ssd = rotational == Some(false);
-        let fstype = m.map(|m| m.fstype.clone()).or_else(|| info.get("File System Personality").map(|s| s.to_ascii_lowercase()));
+        let fstype = m.map(|m| m.fstype.clone()).or_else(|| {
+            info.get("File System Personality")
+                .map(|s| s.to_ascii_lowercase())
+        });
         let size = m
             .and_then(|m| crate::mount::usage(&m.target).map(|u| u.total))
             .or_else(|| info.get("Disk Size").and_then(|v| parse_diskutil_size(v)))
@@ -1060,11 +1255,16 @@ mod imp {
             fstrim_timer: None,
             used_pct: m.and_then(|m| crate::mount::usage(&m.target).map(|u| u.percent)),
             system,
-            encrypted: info.get("FileVault").is_some_and(|v| v.eq_ignore_ascii_case("yes")),
+            encrypted: info
+                .get("FileVault")
+                .is_some_and(|v| v.eq_ignore_ascii_case("yes")),
             virtual_disk: crate::virt::detect().is_some(),
         };
         let a = assess(&f);
-        Ok(Gathered { fss: vec![(f, a)], disk: disk_path })
+        Ok(Gathered {
+            fss: vec![(f, a)],
+            disk: disk_path,
+        })
     }
 
     pub fn sample_map(_: &Gathered, _: usize) -> Result<DiskMap, String> {
@@ -1108,7 +1308,10 @@ mod imp {
             assert_eq!(disk_name("/dev/disk3s1s1"), "disk3");
             assert_eq!(disk_name("disk10s2"), "disk10");
             assert_eq!(disk_name("disk4"), "disk4");
-            assert_eq!(parse_diskutil_size("500.3 GB (500277790720 Bytes)"), Some(500277790720));
+            assert_eq!(
+                parse_diskutil_size("500.3 GB (500277790720 Bytes)"),
+                Some(500277790720)
+            );
             assert_eq!(parse_diskutil_size("no size"), None);
         }
     }
@@ -1166,30 +1369,53 @@ mod tests {
     #[test]
     fn ssd_with_discard_is_almost_none() {
         // lab-243: btrfs on a SATA SSD, discard=async.
-        let a = assess(&facts("btrfs", Some(false), true, &["rw", "ssd", "discard=async"]));
+        let a = assess(&facts(
+            "btrfs",
+            Some(false),
+            true,
+            &["rw", "ssd", "discard=async"],
+        ));
         assert_eq!(a.chance, Chance::AlmostNone);
         assert!(a.reasons[0].contains("discard=async"));
     }
 
     #[test]
     fn hdd_by_filesystem() {
-        assert_eq!(assess(&facts("ntfs3", Some(true), false, &["rw"])).chance, Chance::High);
-        assert_eq!(assess(&facts("vfat", Some(true), false, &["rw"])).chance, Chance::High);
+        assert_eq!(
+            assess(&facts("ntfs3", Some(true), false, &["rw"])).chance,
+            Chance::High
+        );
+        assert_eq!(
+            assess(&facts("vfat", Some(true), false, &["rw"])).chance,
+            Chance::High
+        );
         // 10.0.0.251: ext4 on an HDD.
         let a = assess(&facts("ext4", Some(true), false, &["rw", "relatime"]));
         assert_eq!(a.chance, Chance::Medium);
         assert!(a.steps.iter().any(|s| s.contains("ext4magic")));
         assert!(a.steps.iter().any(|s| s.contains("photorec")));
-        assert!(a.steps.iter().any(|s| s.contains("ddrescue -d -n /dev/sda3")));
+        assert!(
+            a.steps
+                .iter()
+                .any(|s| s.contains("ddrescue -d -n /dev/sda3"))
+        );
     }
 
     #[test]
     fn fstrim_timer_lowers_and_adds_a_step() {
         let mut f = facts("ext4", Some(false), true, &["rw"]);
-        f.fstrim_timer = Some(Timer { enabled: true, last: Some("Mon 2026-09-21".into()), next: None });
+        f.fstrim_timer = Some(Timer {
+            enabled: true,
+            last: Some("Mon 2026-09-21".into()),
+            next: None,
+        });
         let a = assess(&f);
         assert_eq!(a.chance, Chance::Low);
-        assert!(a.steps.iter().any(|s| s.contains("systemctl stop fstrim.timer")));
+        assert!(
+            a.steps
+                .iter()
+                .any(|s| s.contains("systemctl stop fstrim.timer"))
+        );
         // TRIM that never reaches the SSD (behind a RAID controller).
         let a = assess(&facts("ext4", Some(false), false, &["rw"]));
         assert_eq!(a.chance, Chance::Medium);
@@ -1216,7 +1442,11 @@ mod tests {
         f.system = true;
         let a = assess(&f);
         assert_eq!(a.chance, Chance::Low);
-        assert!(a.reasons[0].contains("thin provisioning"), "{:?}", a.reasons);
+        assert!(
+            a.reasons[0].contains("thin provisioning"),
+            "{:?}",
+            a.reasons
+        );
         assert!(!a.reasons.iter().any(|r| r.contains("platters")));
         assert!(a.steps.iter().any(|s| s.contains("snapshot")));
         assert!(a.steps.iter().any(|s| s.contains("rescue mode")));
@@ -1231,13 +1461,23 @@ mod tests {
         f.system = true;
         let a = assess(&f);
         assert_eq!(a.chance, Chance::Low);
-        assert!(a.reasons.iter().any(|r| r.contains("trims freed blocks automatically")), "{:?}", a.reasons);
+        assert!(
+            a.reasons
+                .iter()
+                .any(|r| r.contains("trims freed blocks automatically")),
+            "{:?}",
+            a.reasons
+        );
         assert!(a.steps.iter().any(|s| s.contains("tmutil")));
         // An APFS HDD (no automatic trim) points at snapshots instead.
         let f = facts("apfs", Some(true), false, &["rw"]);
         let a = assess(&f);
         assert_eq!(a.chance, Chance::Medium);
-        assert!(a.reasons.iter().any(|r| r.contains("snapshot")), "{:?}", a.reasons);
+        assert!(
+            a.reasons.iter().any(|r| r.contains("snapshot")),
+            "{:?}",
+            a.reasons
+        );
     }
 
     #[test]
@@ -1262,7 +1502,13 @@ mod tests {
         assert_eq!(classify(&b), Sample::Data);
         assert_eq!(cell_char(&[Sample::Data; 4], true), '#');
         assert_eq!(cell_char(&[Sample::Empty; 4], true), '.');
-        assert_eq!(cell_char(&[Sample::Data, Sample::Empty, Sample::Empty, Sample::Empty], true), '+');
+        assert_eq!(
+            cell_char(
+                &[Sample::Data, Sample::Empty, Sample::Empty, Sample::Empty],
+                true
+            ),
+            '+'
+        );
         // 4% used, data in 5% of samples: ~1% of the free space holds data.
         let r = free_space_residue(0.05, 0.04).unwrap();
         assert!((r - 0.0104).abs() < 0.001);

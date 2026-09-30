@@ -8,6 +8,10 @@ license = "MIT"
 repository = "https://github.com/dalang-io/dcheck"
 readme = "README.md"
 
+[lib]
+name = "dcheck"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dcheck"
 path = "src/main.rs"
@@ -21,3 +25,4 @@ strip = true
 
 [dependencies]
 ratatui = "0.29.0"
+wayang-tui = { git = "https://github.com/dalang-io/wayang-tui", tag = "v0.2.1" }

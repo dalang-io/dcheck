@@ -77,7 +77,9 @@ impl CpuInfo {
             let (limit, source) = match (warn_override, s.high_c, s.crit_c) {
                 (Some(w), _, _) => (w, "config cpu_temp_warn_c"),
                 (None, Some(h), _) if h > 0 => (h, "sensor high limit"),
-                (None, None, Some(c)) if c > 10 => (c - 10, "10°C below the sensor's critical limit"),
+                (None, None, Some(c)) if c > 10 => {
+                    (c - 10, "10°C below the sensor's critical limit")
+                }
                 _ => (DEFAULT_CPU_WARN_C, "default"),
             };
             if let Some(crit) = s.crit_c.filter(|c| *c > 0 && s.temp_c >= *c) {
@@ -116,13 +118,23 @@ impl CpuInfo {
 
         let label = match severity {
             0 if sensors.is_empty() && self.model.is_empty() => {
-                return CpuHealth { label: "UNKNOWN", severity: 1, issues, notes };
+                return CpuHealth {
+                    label: "UNKNOWN",
+                    severity: 1,
+                    issues,
+                    notes,
+                };
             }
             0 => "OK",
             2 => "MONITOR",
             _ => "CRITICAL",
         };
-        CpuHealth { label, severity, issues, notes }
+        CpuHealth {
+            label,
+            severity,
+            issues,
+            notes,
+        }
     }
 }
 
@@ -213,19 +225,23 @@ pub fn parse_load(text: &str) -> Option<f64> {
 mod linux {
     use std::path::{Path, PathBuf};
 
-    use super::{parse_cpuinfo, parse_load, CpuInfo, CpuSensor};
+    use super::{CpuInfo, CpuSensor, parse_cpuinfo, parse_load};
 
     pub fn read() -> CpuInfo {
         let mut info = std::fs::read_to_string("/proc/cpuinfo")
             .map(|t| parse_cpuinfo(&t))
             .unwrap_or_default();
         // Prefer the live scaling frequency when available.
-        if let Ok(freq) = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") {
+        if let Ok(freq) =
+            std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+        {
             if let Ok(khz) = freq.trim().parse::<f64>() {
                 info.mhz = Some(khz / 1000.0);
             }
         }
-        if let Ok(freq) = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq") {
+        if let Ok(freq) =
+            std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
+        {
             if let Ok(khz) = freq.trim().parse::<f64>() {
                 info.max_mhz = Some(khz / 1000.0);
             }
@@ -245,7 +261,12 @@ mod linux {
     pub fn cpu_sensors(hwmon: &Path) -> Vec<CpuSensor> {
         const CPU_SENSORS: [&str; 4] = ["coretemp", "k10temp", "zenpower", "cpu_thermal"];
         let milli = |p: &Path| -> Option<i64> {
-            std::fs::read_to_string(p).ok()?.trim().parse::<i64>().ok().map(|m| m / 1000)
+            std::fs::read_to_string(p)
+                .ok()?
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .map(|m| m / 1000)
         };
         let mut dirs: Vec<_> = match std::fs::read_dir(hwmon) {
             Ok(d) => d.flatten().map(|e| e.path()).collect(),
@@ -255,13 +276,20 @@ mod linux {
         let mut out = Vec::new();
         let mut fallback = None;
         for dir in dirs {
-            let name = std::fs::read_to_string(dir.join("name")).unwrap_or_default().trim().to_string();
+            let name = std::fs::read_to_string(dir.join("name"))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             let mut inputs: Vec<(u32, PathBuf)> = std::fs::read_dir(&dir)
                 .map(|d| {
                     d.flatten()
                         .filter_map(|f| {
                             let n = f.file_name().to_string_lossy().to_string();
-                            let idx = n.strip_prefix("temp")?.strip_suffix("_input")?.parse().ok()?;
+                            let idx = n
+                                .strip_prefix("temp")?
+                                .strip_suffix("_input")?
+                                .parse()
+                                .ok()?;
                             Some((idx, f.path()))
                         })
                         .collect()
@@ -309,7 +337,11 @@ mod linux {
             }
             if out.len() == before {
                 if let Some((idx, path, label)) = labelled.first() {
-                    let label = if label.is_empty() { name.clone() } else { label.clone() };
+                    let label = if label.is_empty() {
+                        name.clone()
+                    } else {
+                        label.clone()
+                    };
                     out.extend(sensor(*idx, path, label));
                 }
             }
@@ -325,16 +357,12 @@ mod linux {
 mod macos {
     use std::process::Command;
 
-    use super::{parse_load, CpuInfo};
+    use super::{CpuInfo, parse_load};
 
     fn sysctl_str(key: &str) -> Option<String> {
         let out = Command::new("sysctl").arg("-n").arg(key).output().ok()?;
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        if s.is_empty() { None } else { Some(s) }
     }
 
     fn sysctl_u32(key: &str) -> Option<u32> {
@@ -378,7 +406,7 @@ mod macos {
 mod freebsd {
     use std::process::Command;
 
-    use super::{parse_load, CpuInfo};
+    use super::{CpuInfo, parse_load};
 
     fn sysctl_str(key: &str) -> Option<String> {
         let out = Command::new("sysctl").arg("-n").arg(key).output().ok()?;
@@ -387,7 +415,9 @@ mod freebsd {
 
     pub fn read() -> CpuInfo {
         let model = sysctl_str("hw.model").unwrap_or_default();
-        let ncpu = sysctl_str("hw.ncpu").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let ncpu = sysctl_str("hw.ncpu")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let temp_c = sysctl_str("dev.cpu.0.temperature")
             .and_then(|s| s.trim_end_matches('C').parse::<f64>().ok())
             .map(|t| t as i64);
@@ -431,7 +461,12 @@ mod tests {
     }
 
     fn pkg(label: &str, t: i64, high: Option<i64>, crit: Option<i64>) -> CpuSensor {
-        CpuSensor { label: label.into(), temp_c: t, high_c: high, crit_c: crit }
+        CpuSensor {
+            label: label.into(),
+            temp_c: t,
+            high_c: high,
+            crit_c: crit,
+        }
     }
 
     #[test]
@@ -448,29 +483,54 @@ mod tests {
         let h = c.health_with(None);
         assert_eq!((h.label, h.severity), ("OK", 0));
         assert!(h.issues.is_empty());
-        assert!(h.notes.iter().any(|n| n.contains("Package id 1 at 73°C, only 4°C below")), "{:?}", h.notes);
+        assert!(
+            h.notes
+                .iter()
+                .any(|n| n.contains("Package id 1 at 73°C, only 4°C below")),
+            "{:?}",
+            h.notes
+        );
         // 9°C apart: below the 10°C spread note.
-        assert!(!h.notes.iter().any(|n| n.contains("hotter")), "{:?}", h.notes);
+        assert!(
+            !h.notes.iter().any(|n| n.contains("hotter")),
+            "{:?}",
+            h.notes
+        );
     }
 
     #[test]
     fn cpu_limits_come_from_the_sensor() {
         let hot = |t| CpuInfo {
             model: "x".into(),
-            sensors: vec![pkg("Package id 0", t, Some(77), Some(87)), pkg("Package id 1", 50, Some(77), Some(87))],
+            sensors: vec![
+                pkg("Package id 0", t, Some(77), Some(87)),
+                pkg("Package id 1", 50, Some(77), Some(87)),
+            ],
             ..Default::default()
         };
         let h = hot(80).health_with(None);
         assert_eq!(h.label, "MONITOR");
-        assert!(h.issues[0].contains("≥ 77°C (sensor high limit)"), "{:?}", h.issues);
+        assert!(
+            h.issues[0].contains("≥ 77°C (sensor high limit)"),
+            "{:?}",
+            h.issues
+        );
         assert!(h.notes.iter().any(|n| n.contains("30°C hotter")));
         assert_eq!(hot(90).health_with(None).label, "CRITICAL");
         // Override from config.
         assert_eq!(hot(70).health_with(Some(65)).label, "MONITOR");
         // No limits reported: default 85°C.
-        let bare = CpuInfo { model: "x".into(), temp_c: Some(80), ..Default::default() };
+        let bare = CpuInfo {
+            model: "x".into(),
+            temp_c: Some(80),
+            ..Default::default()
+        };
         assert_eq!(bare.health_with(None).label, "OK");
-        let bare = CpuInfo { model: "x".into(), temp_c: Some(86), ..Default::default() };
+        let bare = CpuInfo {
+            model: "x".into(),
+            temp_c: Some(86),
+            ..Default::default()
+        };
         assert_eq!(bare.health_with(None).label, "MONITOR");
     }
 
@@ -482,14 +542,27 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         for (f, v) in [
             ("name", "coretemp"),
-            ("temp1_label", "Package id 0"), ("temp1_input", "64000"), ("temp1_max", "77000"), ("temp1_crit", "87000"),
-            ("temp2_label", "Core 0"), ("temp2_input", "60000"),
-            ("temp3_label", "Package id 1"), ("temp3_input", "73000"), ("temp3_max", "77000"), ("temp3_crit", "87000"),
+            ("temp1_label", "Package id 0"),
+            ("temp1_input", "64000"),
+            ("temp1_max", "77000"),
+            ("temp1_crit", "87000"),
+            ("temp2_label", "Core 0"),
+            ("temp2_input", "60000"),
+            ("temp3_label", "Package id 1"),
+            ("temp3_input", "73000"),
+            ("temp3_max", "77000"),
+            ("temp3_crit", "87000"),
         ] {
             std::fs::write(d.join(f), v).unwrap();
         }
         let s = linux::cpu_sensors(&root);
         let _ = std::fs::remove_dir_all(&root);
-        assert_eq!(s, vec![pkg("Package id 0", 64, Some(77), Some(87)), pkg("Package id 1", 73, Some(77), Some(87))]);
+        assert_eq!(
+            s,
+            vec![
+                pkg("Package id 0", 64, Some(77), Some(87)),
+                pkg("Package id 1", 73, Some(77), Some(87))
+            ]
+        );
     }
 }

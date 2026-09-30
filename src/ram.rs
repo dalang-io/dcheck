@@ -82,7 +82,11 @@ impl RamInfo {
             return None;
         }
         let n = self.total_bytes.div_ceil(size) as usize;
-        Some(if self.slots_total > 0 { n.min(self.slots_total as usize) } else { n })
+        Some(if self.slots_total > 0 {
+            n.min(self.slots_total as usize)
+        } else {
+            n
+        })
     }
 
     /// Best count of populated slots across SMBIOS, EDAC and the estimate.
@@ -118,7 +122,10 @@ impl RamInfo {
                 None => notes.push(base),
             }
         }
-        if !self.edac_dimms.is_empty() && self.edac_dimms.len() != self.modules.len() && !self.modules.is_empty() {
+        if !self.edac_dimms.is_empty()
+            && self.edac_dimms.len() != self.modules.len()
+            && !self.modules.is_empty()
+        {
             notes.push(format!(
                 "the memory controller (EDAC) reports {} DIMM(s), the firmware lists {} — an incomplete firmware table, or mirrored/spare DIMMs",
                 self.edac_dimms.len(),
@@ -182,14 +189,11 @@ pub fn parse_meminfo(text: &str) -> RamInfo {
             }
         }
     }
-    let avail = map
-        .get("MemAvailable")
-        .copied()
-        .unwrap_or_else(|| {
-            map.get("MemFree").copied().unwrap_or(0)
-                + map.get("Buffers").copied().unwrap_or(0)
-                + map.get("Cached").copied().unwrap_or(0)
-        });
+    let avail = map.get("MemAvailable").copied().unwrap_or_else(|| {
+        map.get("MemFree").copied().unwrap_or(0)
+            + map.get("Buffers").copied().unwrap_or(0)
+            + map.get("Cached").copied().unwrap_or(0)
+    });
     RamInfo {
         total_bytes: map.get("MemTotal").copied().unwrap_or(0) * 1024,
         available_bytes: avail * 1024,
@@ -325,13 +329,7 @@ pub fn parse_smbios17(bytes: &[u8]) -> Option<RamModule> {
     }
     let fmt = &bytes[..len];
     let strings = &bytes[len..];
-    let u8_at = |o: usize| -> u8 {
-        if o < len {
-            fmt[o]
-        } else {
-            0
-        }
-    };
+    let u8_at = |o: usize| -> u8 { if o < len { fmt[o] } else { 0 } };
     let u16_at = |o: usize| -> u16 {
         if o + 2 <= len {
             u16::from_le_bytes([fmt[o], fmt[o + 1]])
@@ -394,11 +392,7 @@ pub fn parse_smbios17(bytes: &[u8]) -> Option<RamModule> {
     };
     let rank = if len >= 0x1C {
         let r = (u8_at(0x1B) & 0x0F) as u32;
-        if r > 0 {
-            Some(r)
-        } else {
-            None
-        }
+        if r > 0 { Some(r) } else { None }
     } else {
         None
     };
@@ -497,8 +491,12 @@ fn infer_vendor(manufacturer: &str, part: Option<&str>) -> String {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn parse_sp_memory(text: &str) -> Vec<RamModule> {
     use crate::json::Json;
-    let Some(Json::Obj(root)) = Json::parse(text) else { return Vec::new() };
-    let Some(Json::Arr(items)) = root.get("SPMemoryDataType") else { return Vec::new() };
+    let Some(Json::Obj(root)) = Json::parse(text) else {
+        return Vec::new();
+    };
+    let Some(Json::Arr(items)) = root.get("SPMemoryDataType") else {
+        return Vec::new();
+    };
     let module = |d: &Json, on_package: bool| {
         let get = |k: &str| d.get(k).and_then(|v| v.as_str()).and_then(nonempty);
         let size = ["dimm_size", "size", "SPMemoryDataType"]
@@ -508,7 +506,13 @@ pub fn parse_sp_memory(text: &str) -> Vec<RamModule> {
         let part = get("dimm_part_number").or_else(|| get("part_number"));
         let mf = get("dimm_manufacturer").or_else(|| get("manufacturer"));
         RamModule {
-            locator: get("_name").unwrap_or_else(|| if on_package { "on-package".into() } else { String::new() }),
+            locator: get("_name").unwrap_or_else(|| {
+                if on_package {
+                    "on-package".into()
+                } else {
+                    String::new()
+                }
+            }),
             size_bytes: size,
             kind: get("dimm_type").or_else(|| get("type")).unwrap_or_default(),
             speed_mts: get("dimm_speed")
@@ -569,7 +573,7 @@ mod linux {
     use std::path::Path;
     use std::process::Command;
 
-    use super::{parse_dmidecode17, parse_meminfo, RamInfo};
+    use super::{RamInfo, parse_dmidecode17, parse_meminfo};
 
     pub fn read() -> RamInfo {
         let mut info = std::fs::read_to_string("/proc/meminfo")
@@ -603,7 +607,10 @@ mod linux {
 
         // 3) lshw, when installed.
         if info.modules.is_empty() {
-            if let Ok(out) = Command::new("lshw").args(["-class", "memory", "-json"]).output() {
+            if let Ok(out) = Command::new("lshw")
+                .args(["-class", "memory", "-json"])
+                .output()
+            {
                 if out.status.success() {
                     let (modules, slots) =
                         super::parse_lshw_memory(&String::from_utf8_lossy(&out.stdout));
@@ -619,18 +626,29 @@ mod linux {
 
     /// DIMMs from EDAC: `mc*/dimm*/{dimm_label,size (MB),dimm_ce_count,dimm_ue_count}`.
     pub fn edac_dimms(root: &Path) -> Vec<super::EdacDimm> {
-        let read = |p: &Path| std::fs::read_to_string(p).map(|s| s.trim().to_string()).ok();
+        let read = |p: &Path| {
+            std::fs::read_to_string(p)
+                .map(|s| s.trim().to_string())
+                .ok()
+        };
         let num = |p: &Path| read(p).and_then(|s| s.parse::<u64>().ok());
         let mut out = Vec::new();
-        let Ok(mcs) = std::fs::read_dir(root) else { return out };
+        let Ok(mcs) = std::fs::read_dir(root) else {
+            return out;
+        };
         let mut mcs: Vec<_> = mcs.flatten().map(|e| e.path()).collect();
         mcs.sort();
         for mc in mcs {
-            let Ok(dimms) = std::fs::read_dir(&mc) else { continue };
+            let Ok(dimms) = std::fs::read_dir(&mc) else {
+                continue;
+            };
             let mut dimms: Vec<_> = dimms
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("dimm")))
+                .filter(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("dimm"))
+                })
                 .collect();
             dimms.sort();
             for d in dimms {
@@ -640,7 +658,11 @@ mod linux {
                 }
                 out.push(super::EdacDimm {
                     label: read(&d.join("dimm_label")).unwrap_or_else(|| {
-                        format!("{}/{}", mc.file_name().unwrap().to_string_lossy(), d.file_name().unwrap().to_string_lossy())
+                        format!(
+                            "{}/{}",
+                            mc.file_name().unwrap().to_string_lossy(),
+                            d.file_name().unwrap().to_string_lossy()
+                        )
                     }),
                     size_bytes: size_mb << 20,
                     ce: num(&d.join("dimm_ce_count")).unwrap_or(0),
@@ -730,7 +752,7 @@ mod linux {
 mod macos {
     use std::process::Command;
 
-    use super::{parse_sp_memory, parse_swapusage, RamInfo, RamModule};
+    use super::{RamInfo, RamModule, parse_sp_memory, parse_swapusage};
 
     fn sysctl(key: &str) -> Option<u64> {
         let out = Command::new("sysctl").arg("-n").arg(key).output().ok()?;
@@ -788,17 +810,18 @@ mod macos {
                 _ => {}
             }
         }
-        if any {
-            Some(free + inactive)
-        } else {
-            None
-        }
+        if any { Some(free + inactive) } else { None }
     }
 
     /// DIMM details from `system_profiler SPMemoryDataType -json`.
     fn system_profiler_memory() -> Vec<RamModule> {
-        match Command::new("system_profiler").args(["SPMemoryDataType", "-json"]).output() {
-            Ok(out) if out.status.success() => parse_sp_memory(&String::from_utf8_lossy(&out.stdout)),
+        match Command::new("system_profiler")
+            .args(["SPMemoryDataType", "-json"])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                parse_sp_memory(&String::from_utf8_lossy(&out.stdout))
+            }
             _ => Vec::new(),
         }
     }
@@ -855,7 +878,10 @@ mod tests {
         let notes = r.notes();
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("lists 2 module(s) = 64 GiB"), "{notes:?}");
-        assert!(notes[0].contains("about 4 × 32 GiB are installed"), "{notes:?}");
+        assert!(
+            notes[0].contains("about 4 × 32 GiB are installed"),
+            "{notes:?}"
+        );
     }
 
     #[test]
@@ -873,17 +899,30 @@ mod tests {
     #[test]
     fn edac_mismatch_is_noted() {
         // 10.0.0.251: SMBIOS 1 module, EDAC 2 DIMMs, OS ~31 GiB.
-        let d = |l: &str| EdacDimm { label: l.into(), size_bytes: 32 << 30, ce: 0, ue: 0 };
+        let d = |l: &str| EdacDimm {
+            label: l.into(),
+            size_bytes: 32 << 30,
+            ce: 0,
+            ue: 0,
+        };
         let r = RamInfo {
             total_bytes: 32_609_508 * 1024,
             modules: vec![module("A1", 32)],
-            edac_dimms: vec![d("CPU_SrcID#0_Ha#0_Chan#0_DIMM#0"), d("CPU_SrcID#1_Ha#0_Chan#0_DIMM#0")],
+            edac_dimms: vec![
+                d("CPU_SrcID#0_Ha#0_Chan#0_DIMM#0"),
+                d("CPU_SrcID#1_Ha#0_Chan#0_DIMM#0"),
+            ],
             slots_total: 24,
             ..Default::default()
         };
         assert_eq!(r.populated(), 2);
         let notes = r.notes();
-        assert!(notes.iter().any(|n| n.contains("EDAC) reports 2 DIMM(s), the firmware lists 1")), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("EDAC) reports 2 DIMM(s), the firmware lists 1")),
+            "{notes:?}"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -893,13 +932,26 @@ mod tests {
         let d = root.join("mc0/dimm0");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::create_dir_all(root.join("mc0/dimm1")).unwrap();
-        for (f, v) in [("dimm_label", "A1"), ("size", "32768"), ("dimm_ce_count", "3"), ("dimm_ue_count", "0")] {
+        for (f, v) in [
+            ("dimm_label", "A1"),
+            ("size", "32768"),
+            ("dimm_ce_count", "3"),
+            ("dimm_ue_count", "0"),
+        ] {
             std::fs::write(d.join(f), v).unwrap();
         }
         std::fs::write(root.join("mc0/dimm1/size"), "0").unwrap(); // empty slot
         let dimms = linux::edac_dimms(&root);
         let _ = std::fs::remove_dir_all(&root);
-        assert_eq!(dimms, vec![EdacDimm { label: "A1".into(), size_bytes: 32 << 30, ce: 3, ue: 0 }]);
+        assert_eq!(
+            dimms,
+            vec![EdacDimm {
+                label: "A1".into(),
+                size_bytes: 32 << 30,
+                ce: 3,
+                ue: 0
+            }]
+        );
     }
 
     #[test]
@@ -931,10 +983,14 @@ mod tests {
     #[test]
     fn parses_macos_swapusage() {
         let (total, free) =
-            parse_swapusage("total = 8192.00M  used = 7327.94M  free = 864.06M  (encrypted)").unwrap();
+            parse_swapusage("total = 8192.00M  used = 7327.94M  free = 864.06M  (encrypted)")
+                .unwrap();
         assert_eq!(total, 8192 << 20);
         assert_eq!(free / (1 << 20), 864);
-        assert_eq!(parse_swapusage("total = 0.00M  used = 0.00M  free = 0.00M"), Some((0, 0)));
+        assert_eq!(
+            parse_swapusage("total = 0.00M  used = 0.00M  free = 0.00M"),
+            Some((0, 0))
+        );
     }
 
     #[test]

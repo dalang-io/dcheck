@@ -197,11 +197,12 @@ pub fn device_report_lines_with(d: &Device, smart: Option<&smartctl::SmartData>)
     }
     // SMART usually carries the identity; the native INQUIRY/IDENTIFY is
     // slow on some controllers, so only ask when something is missing.
-    let nid = if smart.is_some_and(|s| s.model.is_some() && s.serial.is_some() && s.firmware.is_some()) {
-        crate::native::IdInfo::default()
-    } else {
-        crate::native::identity(d)
-    };
+    let nid =
+        if smart.is_some_and(|s| s.model.is_some() && s.serial.is_some() && s.firmware.is_some()) {
+            crate::native::IdInfo::default()
+        } else {
+            crate::native::identity(d)
+        };
     let mut out: Vec<String> = Vec::new();
 
     let banner = if ui_plain() {
@@ -249,7 +250,12 @@ pub fn device_report_lines_with(d: &Device, smart: Option<&smartctl::SmartData>)
         out.push("  Removable    : yes".into());
     }
     authenticity_lines(
-        &crate::authenticity::for_device(d, smart, model.as_deref().unwrap_or(""), serial.as_deref()),
+        &crate::authenticity::for_device(
+            d,
+            smart,
+            model.as_deref().unwrap_or(""),
+            serial.as_deref(),
+        ),
         &mut out,
     );
 
@@ -325,7 +331,10 @@ pub fn device_report_lines_with(d: &Device, smart: Option<&smartctl::SmartData>)
             out.push("  Verdict      : VIRTUAL".into());
             out.push(format!("  Note         : {}", crate::virt::DISK_NOTE));
             if let Some(v) = crate::virt::detect() {
-                out.push(format!("  Hypervisor   : {} — check the provider's status page for storage health", v.label()));
+                out.push(format!(
+                    "  Hypervisor   : {} — check the provider's status page for storage health",
+                    v.label()
+                ));
             }
         }
         None => {
@@ -372,7 +381,11 @@ fn authenticity_lines(a: &crate::authenticity::Authenticity, out: &mut Vec<Strin
     }
     out.push(String::new());
     out.push(section("AUTHENTICITY"));
-    out.push(format!("  Identity     : {} — {}", a.level.label(), a.summary()));
+    out.push(format!(
+        "  Identity     : {} — {}",
+        a.level.label(),
+        a.summary()
+    ));
     if let Some(w) = &a.wwn {
         out.push(format!("  WWN          : {w}"));
     }
@@ -463,7 +476,9 @@ fn health_lines(d: &Device, s: &smartctl::SmartData, out: &mut Vec<String>) {
     let age = s.manufactured.and_then(|(y, w)| age_years(y, w));
     match s.manufactured {
         Some((y, w)) => {
-            let old = age.map(|a| format!(" — {a:.1} years old")).unwrap_or_default();
+            let old = age
+                .map(|a| format!(" — {a:.1} years old"))
+                .unwrap_or_default();
             out.push(format!("  Manufactured : {y} week {w}{old}"));
         }
         None => out.push(format!("  Manufactured : {}", manufacture_unknown(d, s))),
@@ -504,7 +519,9 @@ fn health_lines(d: &Device, s: &smartctl::SmartData, out: &mut Vec<String>) {
             out.push(format!("  Uncorrected  : {u} errors"));
         }
         if let Some(n) = s.non_medium_errors {
-            out.push(format!("  Non-medium   : {n} errors (transport/controller)"));
+            out.push(format!(
+                "  Non-medium   : {n} errors (transport/controller)"
+            ));
         }
     }
     if let Some(t) = &s.last_self_test {
@@ -521,7 +538,11 @@ fn health_lines(d: &Device, s: &smartctl::SmartData, out: &mut Vec<String>) {
         features.push(if t { "TRIM" } else { "no TRIM" });
     }
     if let Some(w) = s.write_cache {
-        features.push(if w { "write cache on" } else { "write cache off" });
+        features.push(if w {
+            "write cache on"
+        } else {
+            "write cache off"
+        });
     }
     if !features.is_empty() {
         out.push(format!("  Features     : {}", features.join(", ")));
@@ -549,7 +570,9 @@ fn health_lines(d: &Device, s: &smartctl::SmartData, out: &mut Vec<String>) {
             out.push(format!("  Critical temp: {c} min"));
         }
     }
-    if let (Some(used), Some(what), Some(hours)) = (h.design_life_used, h.design_limit, h.design_hours) {
+    if let (Some(used), Some(what), Some(hours)) =
+        (h.design_life_used, h.design_limit, h.design_hours)
+    {
         out.push(format!(
             "  Design life  : {hours} h ({:.1} y @24/7, assumed — drives do not report it)",
             hours as f64 / (365.0 * 24.0)
@@ -602,10 +625,7 @@ pub fn life_left(h: &health::Health) -> Option<String> {
     };
     if h.remaining_poh == Some(0) {
         return Some(match h.overdue_poh {
-            Some(over) => format!(
-                "0 — past its rated life by {} @24/7",
-                fmt(over / 24)
-            ),
+            Some(over) => format!("0 — past its rated life by {} @24/7", fmt(over / 24)),
             None => "0 — at or beyond its rated life".into(),
         });
     }
@@ -662,14 +682,20 @@ pub fn fmt_years(days: u64) -> String {
 pub fn ram_report_lines(r: &crate::ram::RamInfo) -> Vec<String> {
     let mut out = Vec::new();
     out.push(section("MEMORY"));
-    out.push(format!("  Total        : {}", human_size_bin(r.total_bytes)));
+    out.push(format!(
+        "  Total        : {}",
+        human_size_bin(r.total_bytes)
+    ));
     out.push(format!(
         "  Used         : {} ({:.0}%)  {}",
         human_size_bin(r.used_bytes()),
         r.used_percent(),
         bar(r.used_percent(), 20)
     ));
-    out.push(format!("  Available    : {}", human_size_bin(r.available_bytes)));
+    out.push(format!(
+        "  Available    : {}",
+        human_size_bin(r.available_bytes)
+    ));
     if r.swap_total_bytes > 0 {
         out.push(format!(
             "  Swap         : {} used of {}",
@@ -687,7 +713,11 @@ pub fn ram_report_lines(r: &crate::ram::RamInfo) -> Vec<String> {
         out.push("  Layout       : on-package (unified memory, not replaceable)".to_string());
     } else if r.slots_total > 0 || !r.modules.is_empty() {
         let populated = r.populated();
-        let slots = if r.slots_total > 0 { format!(" / {}", r.slots_total) } else { String::new() };
+        let slots = if r.slots_total > 0 {
+            format!(" / {}", r.slots_total)
+        } else {
+            String::new()
+        };
         if populated != r.modules.len() {
             out.push(format!(
                 "  DIMM slots   : {populated} used{slots} (firmware lists {})",
@@ -745,13 +775,14 @@ pub fn ram_report_lines(r: &crate::ram::RamInfo) -> Vec<String> {
     }
     if !r.modules.is_empty() {
         out.push(String::new());
-        out.push(section(if on_package { "MODULES (SYSTEM PROFILER)" } else { "MODULES (FIRMWARE / SMBIOS)" }));
+        out.push(section(if on_package {
+            "MODULES (SYSTEM PROFILER)"
+        } else {
+            "MODULES (FIRMWARE / SMBIOS)"
+        }));
         let hidden = r.populated().saturating_sub(r.modules.len());
         for m in &r.modules {
-            let speed = m
-                .speed_mts
-                .map(|s| format!("{s} MT/s"))
-                .unwrap_or_default();
+            let speed = m.speed_mts.map(|s| format!("{s} MT/s")).unwrap_or_default();
             let vendor = m.manufacturer.clone().unwrap_or_default();
             let part = m.part_number.clone().unwrap_or_default();
             out.push(format!(
@@ -794,7 +825,11 @@ pub fn cpu_report_lines(c: &crate::cpu::CpuInfo) -> Vec<String> {
     if let Some(kb) = c.cache_kb {
         out.push(format!("  Cache        : {kb} KB"));
     }
-    if c.sensors.len() > 1 || c.sensors.iter().any(|s| s.high_c.is_some() || s.crit_c.is_some()) {
+    if c.sensors.len() > 1
+        || c.sensors
+            .iter()
+            .any(|s| s.high_c.is_some() || s.crit_c.is_some())
+    {
         for s in &c.sensors {
             let mut lim = Vec::new();
             if let Some(h) = s.high_c {
@@ -803,8 +838,16 @@ pub fn cpu_report_lines(c: &crate::cpu::CpuInfo) -> Vec<String> {
             if let Some(cr) = s.crit_c {
                 lim.push(format!("crit {cr}°C"));
             }
-            let lim = if lim.is_empty() { String::new() } else { format!(" ({})", lim.join(", ")) };
-            out.push(format!("  {:<13}: {}°C{lim}", truncate(&s.label, 13), s.temp_c));
+            let lim = if lim.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", lim.join(", "))
+            };
+            out.push(format!(
+                "  {:<13}: {}°C{lim}",
+                truncate(&s.label, 13),
+                s.temp_c
+            ));
         }
     } else if let Some(t) = c.temp_c {
         out.push(format!("  Temperature  : {t}°C"));
@@ -872,14 +915,25 @@ pub fn board_report_lines(b: &crate::board::BoardInfo) -> Vec<String> {
     if let Some(c) = &b.chassis {
         out.push(format!("  Chassis      : {c}"));
     }
-    if let Some(s) = [&b.system.serial, &b.board.serial].into_iter().flatten().find(|s| !crate::board::placeholder(s)) {
+    if let Some(s) = [&b.system.serial, &b.board.serial]
+        .into_iter()
+        .flatten()
+        .find(|s| !crate::board::placeholder(s))
+    {
         out.push(format!("  Serial       : {s}"));
     }
     out.push(String::new());
     out.push(section("FIRMWARE"));
-    out.push(format!("  BIOS         : {} {}", opt_s(&b.bios.vendor), opt_s(&b.bios.version)));
+    out.push(format!(
+        "  BIOS         : {} {}",
+        opt_s(&b.bios.vendor),
+        opt_s(&b.bios.version)
+    ));
     if let Some((y, m, d)) = b.bios.date {
-        let age = b.bios_age_years().map(|a| format!(" ({a:.1} years old)")).unwrap_or_default();
+        let age = b
+            .bios_age_years()
+            .map(|a| format!(" ({a:.1} years old)"))
+            .unwrap_or_default();
         out.push(format!("  BIOS date    : {y}-{m:02}-{d:02}{age}"));
     }
     if let Some(u) = b.bios.uefi {
@@ -888,7 +942,10 @@ pub fn board_report_lines(b: &crate::board::BoardInfo) -> Vec<String> {
             Some(false) => ", Secure Boot off",
             None => "",
         };
-        out.push(format!("  Boot mode    : {}{sb}", if u { "UEFI" } else { "legacy BIOS" }));
+        out.push(format!(
+            "  Boot mode    : {}{sb}",
+            if u { "UEFI" } else { "legacy BIOS" }
+        ));
     }
     if let Some(f) = &b.bmc_firmware {
         out.push(format!("  BMC firmware : {f} (IPMI)"));
@@ -917,14 +974,17 @@ pub fn board_report_lines(b: &crate::board::BoardInfo) -> Vec<String> {
             (Kind::Power, "Power"),
             (Kind::Other, "Other"),
         ] {
-            let list: Vec<&crate::board::BoardSensor> = b.sensors.iter().filter(|s| s.kind == kind).collect();
+            let list: Vec<&crate::board::BoardSensor> =
+                b.sensors.iter().filter(|s| s.kind == kind).collect();
             if list.is_empty() {
                 continue;
             }
             out.push(format!("  {title}:"));
             for s in list {
                 let val = match (&s.value, &s.state) {
-                    (Some(v), _) if s.unit == "RPM" || s.unit == "W" => format!("{v:.0} {}", s.unit),
+                    (Some(v), _) if s.unit == "RPM" || s.unit == "W" => {
+                        format!("{v:.0} {}", s.unit)
+                    }
                     (Some(v), _) if s.unit == "°C" => format!("{v:.0}{}", s.unit),
                     (Some(v), _) => format!("{v:.2} {}", s.unit),
                     (None, Some(st)) => st.clone(),
@@ -935,15 +995,26 @@ pub fn board_report_lines(b: &crate::board::BoardInfo) -> Vec<String> {
                     Status::Warn => "WARN",
                     Status::Crit => "CRITICAL",
                 };
-                out.push(format!("    {:<24} {:>14}  {flag:<8} {}", s.name, val, s.source));
+                out.push(format!(
+                    "    {:<24} {:>14}  {flag:<8} {}",
+                    s.name, val, s.source
+                ));
             }
         }
     }
     if !b.events.is_empty() {
         out.push(String::new());
-        out.push(section(&format!("EVENT LOG (BMC, last {} of {})", b.events.len().min(10), b.sel_entries)));
+        out.push(section(&format!(
+            "EVENT LOG (BMC, last {} of {})",
+            b.events.len().min(10),
+            b.sel_entries
+        )));
         for e in b.events.iter().rev().take(10) {
-            let t = if e.time < 86_400 * 365 { "(clock unset)   ".to_string() } else { crate::board::fmt_time(e.time) };
+            let t = if e.time < 86_400 * 365 {
+                "(clock unset)   ".to_string()
+            } else {
+                crate::board::fmt_time(e.time)
+            };
             let flag = match e.status {
                 Status::Ok => "  ",
                 Status::Warn => "! ",
@@ -955,18 +1026,32 @@ pub fn board_report_lines(b: &crate::board::BoardInfo) -> Vec<String> {
     let shown: Vec<&crate::board::PciDev> = b.pci.iter().filter(|d| !d.internal()).collect();
     if !shown.is_empty() {
         out.push(String::new());
-        out.push(section(&format!("PCIe DEVICES ({} + {} chipset internal)", shown.len(), b.pci.len() - shown.len())));
+        out.push(section(&format!(
+            "PCIe DEVICES ({} + {} chipset internal)",
+            shown.len(),
+            b.pci.len() - shown.len()
+        )));
         for d in shown {
             let link = d
                 .link
                 .as_ref()
-                .map(|l| format!("  {} GT/s x{} (max {} GT/s x{})", l.cur_gts, l.cur_w, l.max_gts, l.max_w))
+                .map(|l| {
+                    format!(
+                        "  {} GT/s x{} (max {} GT/s x{})",
+                        l.cur_gts, l.cur_w, l.max_gts, l.max_w
+                    )
+                })
                 .unwrap_or_default();
             let aer = match d.aer {
                 Some([c, n, f]) if c + n + f > 0 => format!("  AER {c}/{n}/{f}"),
                 _ => String::new(),
             };
-            out.push(format!("  {}  {:<20} {}", d.addr.trim_start_matches("0000:"), d.class_name(), d.name));
+            out.push(format!(
+                "  {}  {:<20} {}",
+                d.addr.trim_start_matches("0000:"),
+                d.class_name(),
+                d.name
+            ));
             out.push(format!(
                 "  {:>7}  driver: {}{link}{aer}",
                 "",
@@ -978,15 +1063,22 @@ pub fn board_report_lines(b: &crate::board::BoardInfo) -> Vec<String> {
         out.push(String::new());
         out.push(section("USB DEVICES"));
         for u in &b.usb {
-            let speed = if u.speed_mbps >= 1000.0 { format!("{} Gbps", u.speed_mbps / 1000.0) } else { format!("{} Mbps", u.speed_mbps) };
-            out.push(format!("  {:<8} {:04x}:{:04x}  {:<36} {speed}", u.id, u.vendor_id, u.product_id, u.name));
+            let speed = if u.speed_mbps >= 1000.0 {
+                format!("{} Gbps", u.speed_mbps / 1000.0)
+            } else {
+                format!("{} Mbps", u.speed_mbps)
+            };
+            out.push(format!(
+                "  {:<8} {:04x}:{:04x}  {:<36} {speed}",
+                u.id, u.vendor_id, u.product_id, u.name
+            ));
         }
     }
     out
 }
 
 pub fn board_json(b: &crate::board::BoardInfo) -> crate::json::Json {
-    use crate::json::{num, object, string, Json};
+    use crate::json::{Json, num, object, string};
     let st = |s: crate::ipmi::Status| string(format!("{s:?}").to_lowercase());
     let ident = |i: &crate::board::Ident| {
         object(vec![
@@ -1006,7 +1098,12 @@ pub fn board_json(b: &crate::board::BoardInfo) -> crate::json::Json {
             object(vec![
                 ("vendor", opt_json(&b.bios.vendor)),
                 ("version", opt_json(&b.bios.version)),
-                ("date", b.bios.date.map_or(Json::Null, |(y, m, d)| string(format!("{y}-{m:02}-{d:02}")))),
+                (
+                    "date",
+                    b.bios
+                        .date
+                        .map_or(Json::Null, |(y, m, d)| string(format!("{y}-{m:02}-{d:02}"))),
+                ),
                 ("uefi", opt_bool(b.bios.uefi)),
                 ("secure_boot", opt_bool(b.bios.secure_boot)),
             ]),
@@ -1017,8 +1114,14 @@ pub fn board_json(b: &crate::board::BoardInfo) -> crate::json::Json {
             object(vec![
                 ("verdict", string(h.label)),
                 ("severity", num(h.severity as f64)),
-                ("issues", Json::Arr(h.issues.into_iter().map(string).collect())),
-                ("notes", Json::Arr(h.notes.into_iter().map(string).collect())),
+                (
+                    "issues",
+                    Json::Arr(h.issues.into_iter().map(string).collect()),
+                ),
+                (
+                    "notes",
+                    Json::Arr(h.notes.into_iter().map(string).collect()),
+                ),
             ]),
         ),
         (
@@ -1065,16 +1168,34 @@ pub fn board_json(b: &crate::board::BoardInfo) -> crate::json::Json {
                         object(vec![
                             ("address", string(d.addr.clone())),
                             ("class", string(d.class_name())),
-                            ("id", string(format!("{:04x}:{:04x}", d.vendor_id, d.device_id))),
+                            (
+                                "id",
+                                string(format!("{:04x}:{:04x}", d.vendor_id, d.device_id)),
+                            ),
                             ("name", string(d.name.clone())),
                             ("driver", opt_json(&d.driver)),
-                            ("link_width", d.link.as_ref().map_or(Json::Null, |l| num(l.cur_w as f64))),
-                            ("link_max_width", d.link.as_ref().map_or(Json::Null, |l| num(l.max_w as f64))),
-                            ("link_gts", d.link.as_ref().map_or(Json::Null, |l| num(l.cur_gts as f64))),
+                            (
+                                "link_width",
+                                d.link.as_ref().map_or(Json::Null, |l| num(l.cur_w as f64)),
+                            ),
+                            (
+                                "link_max_width",
+                                d.link.as_ref().map_or(Json::Null, |l| num(l.max_w as f64)),
+                            ),
+                            (
+                                "link_gts",
+                                d.link
+                                    .as_ref()
+                                    .map_or(Json::Null, |l| num(l.cur_gts as f64)),
+                            ),
                             (
                                 "aer",
                                 d.aer.map_or(Json::Null, |[c, n, f]| {
-                                    object(vec![("correctable", num(c as f64)), ("nonfatal", num(n as f64)), ("fatal", num(f as f64))])
+                                    object(vec![
+                                        ("correctable", num(c as f64)),
+                                        ("nonfatal", num(n as f64)),
+                                        ("fatal", num(f as f64)),
+                                    ])
                                 }),
                             ),
                         ])
@@ -1089,7 +1210,10 @@ pub fn board_json(b: &crate::board::BoardInfo) -> crate::json::Json {
                     .iter()
                     .map(|u| {
                         object(vec![
-                            ("id", string(format!("{:04x}:{:04x}", u.vendor_id, u.product_id))),
+                            (
+                                "id",
+                                string(format!("{:04x}:{:04x}", u.vendor_id, u.product_id)),
+                            ),
                             ("name", string(u.name.clone())),
                             ("speed_mbps", num(u.speed_mbps)),
                         ])
@@ -1105,16 +1229,34 @@ pub fn ram_json(r: &crate::ram::RamInfo) -> crate::json::Json {
     crate::json::object(vec![
         ("total_bytes", crate::json::num(r.total_bytes as f64)),
         ("used_bytes", crate::json::num(r.used_bytes() as f64)),
-        ("available_bytes", crate::json::num(r.available_bytes as f64)),
+        (
+            "available_bytes",
+            crate::json::num(r.available_bytes as f64),
+        ),
         ("used_percent", crate::json::num(r.used_percent())),
-        ("swap_total_bytes", crate::json::num(r.swap_total_bytes as f64)),
-        ("swap_free_bytes", crate::json::num(r.swap_free_bytes as f64)),
-        ("ecc_correctable", crate::json::num(r.ecc_correctable as f64)),
-        ("ecc_uncorrectable", crate::json::num(r.ecc_uncorrectable as f64)),
+        (
+            "swap_total_bytes",
+            crate::json::num(r.swap_total_bytes as f64),
+        ),
+        (
+            "swap_free_bytes",
+            crate::json::num(r.swap_free_bytes as f64),
+        ),
+        (
+            "ecc_correctable",
+            crate::json::num(r.ecc_correctable as f64),
+        ),
+        (
+            "ecc_uncorrectable",
+            crate::json::num(r.ecc_uncorrectable as f64),
+        ),
         ("memory_type", opt_json(&r.memory_type())),
         ("slots_total", crate::json::num(r.slots_total as f64)),
         ("slots_populated", crate::json::num(r.populated() as f64)),
-        ("estimated_modules", opt_num(r.estimated_modules().map(|v| v as f64))),
+        (
+            "estimated_modules",
+            opt_num(r.estimated_modules().map(|v| v as f64)),
+        ),
         (
             "edac_dimms",
             crate::json::Json::Arr(
@@ -1201,7 +1343,10 @@ pub fn cpu_json(c: &crate::cpu::CpuInfo) -> crate::json::Json {
 pub fn smart_unavailable(d: &Device) -> (String, Option<String>) {
     use crate::model::Bus;
     if crate::virt::is_virtual_disk(d) {
-        return (crate::virt::DISK_NOTE.into(), Some("check the provider's status page / panel".into()));
+        return (
+            crate::virt::DISK_NOTE.into(),
+            Some("check the provider's status page / panel".into()),
+        );
     }
     if !crate::native::is_root() && !crate::enumerate::is_demo() {
         return (
@@ -1250,13 +1395,23 @@ pub fn prometheus_lines(
     out.push_str("# HELP dcheck_capacity_bytes Device capacity in bytes.\n");
     out.push_str("# TYPE dcheck_capacity_bytes gauge\n");
     for d in devices {
-        out.push_str(&metric("dcheck_capacity_bytes", &d.path, None, d.size_bytes as f64));
+        out.push_str(&metric(
+            "dcheck_capacity_bytes",
+            &d.path,
+            None,
+            d.size_bytes as f64,
+        ));
     }
     out.push_str("# HELP dcheck_health_severity 0=ok 1=unknown 2=monitor 3=backup/replace.\n");
     out.push_str("# TYPE dcheck_health_severity gauge\n");
     for (d, m) in devices.iter().zip(all) {
         if m.is_none() && crate::virt::is_virtual_disk(d) {
-            out.push_str(&metric("dcheck_health_severity", &d.path, Some("VIRTUAL"), 0.0));
+            out.push_str(&metric(
+                "dcheck_health_severity",
+                &d.path,
+                Some("VIRTUAL"),
+                0.0,
+            ));
         }
         if let Some((_, h)) = m {
             let sev = match h.verdict {
@@ -1265,7 +1420,12 @@ pub fn prometheus_lines(
                 health::Verdict::Monitor => 2.0,
                 _ => 3.0,
             };
-            out.push_str(&metric("dcheck_health_severity", &d.path, Some(h.verdict.label()), sev));
+            out.push_str(&metric(
+                "dcheck_health_severity",
+                &d.path,
+                Some(h.verdict.label()),
+                sev,
+            ));
         }
     }
     // A port the kernel gave up on (no /dev/sdX) still has to show up.
@@ -1276,18 +1436,36 @@ pub fn prometheus_lines(
     }
     type Gauge = (&'static str, fn(&smartctl::SmartData) -> Option<f64>);
     let gauges: &[Gauge] = &[
-        ("dcheck_temperature_celsius", |s| s.temperature_c.map(|v| v as f64)),
-        ("dcheck_temperature_min_celsius", |s| s.temp_min_c.map(|v| v as f64)),
-        ("dcheck_temperature_max_celsius", |s| s.temp_max_c.map(|v| v as f64)),
-        ("dcheck_power_on_hours", |s| s.power_on_hours.map(|v| v as f64)),
-        ("dcheck_wear_used_percent", |s| s.life_percent.map(|p| (100u64.saturating_sub(p)) as f64)),
-        ("dcheck_written_bytes", |s| s.bytes_written().map(|v| v as f64)),
+        ("dcheck_temperature_celsius", |s| {
+            s.temperature_c.map(|v| v as f64)
+        }),
+        ("dcheck_temperature_min_celsius", |s| {
+            s.temp_min_c.map(|v| v as f64)
+        }),
+        ("dcheck_temperature_max_celsius", |s| {
+            s.temp_max_c.map(|v| v as f64)
+        }),
+        ("dcheck_power_on_hours", |s| {
+            s.power_on_hours.map(|v| v as f64)
+        }),
+        ("dcheck_wear_used_percent", |s| {
+            s.life_percent.map(|p| (100u64.saturating_sub(p)) as f64)
+        }),
+        ("dcheck_written_bytes", |s| {
+            s.bytes_written().map(|v| v as f64)
+        }),
         ("dcheck_media_errors", |s| s.media_errors.map(|v| v as f64)),
-        ("dcheck_reallocated_sectors", |s| s.reallocated.map(|v| v as f64)),
+        ("dcheck_reallocated_sectors", |s| {
+            s.reallocated.map(|v| v as f64)
+        }),
         ("dcheck_pending_sectors", |s| s.pending.map(|v| v as f64)),
-        ("dcheck_uncorrectable_sectors", |s| s.uncorrectable.map(|v| v as f64)),
+        ("dcheck_uncorrectable_sectors", |s| {
+            s.uncorrectable.map(|v| v as f64)
+        }),
         ("dcheck_crc_errors", |s| s.crc_errors.map(|v| v as f64)),
-        ("dcheck_sas_phy_errors", |s| s.phy_errors.map(|p| p.iter().sum::<u64>() as f64)),
+        ("dcheck_sas_phy_errors", |s| {
+            s.phy_errors.map(|p| p.iter().sum::<u64>() as f64)
+        }),
     ];
     for (name, get) in gauges {
         out.push_str(&format!("# TYPE {name} gauge\n"));
@@ -1303,9 +1481,15 @@ pub fn prometheus_lines(
     // rated life a drive is, all from `health::evaluate`.
     type HealthGauge = (&'static str, fn(&health::Health) -> Option<f64>);
     let health_gauges: &[HealthGauge] = &[
-        ("dcheck_design_life_used_percent", |h| h.design_life_used.map(|v| v as f64)),
-        ("dcheck_life_remaining_hours", |h| h.remaining_poh.map(|v| v as f64)),
-        ("dcheck_life_overdue_hours", |h| h.overdue_poh.map(|v| v as f64)),
+        ("dcheck_design_life_used_percent", |h| {
+            h.design_life_used.map(|v| v as f64)
+        }),
+        ("dcheck_life_remaining_hours", |h| {
+            h.remaining_poh.map(|v| v as f64)
+        }),
+        ("dcheck_life_overdue_hours", |h| {
+            h.overdue_poh.map(|v| v as f64)
+        }),
     ];
     for (name, get) in health_gauges {
         out.push_str(&format!("# TYPE {name} gauge\n"));
@@ -1337,8 +1521,14 @@ fn read_smart(d: &Device) -> Option<smartctl::SmartData> {
 /// one command at a time per disk, not per host).
 pub fn metrics_all(devices: &[Device]) -> Vec<Option<(smartctl::SmartData, health::Health)>> {
     std::thread::scope(|scope| {
-        let handles: Vec<_> = devices.iter().map(|d| scope.spawn(move || device_metrics(d))).collect();
-        handles.into_iter().map(|h| h.join().ok().flatten()).collect()
+        let handles: Vec<_> = devices
+            .iter()
+            .map(|d| scope.spawn(move || device_metrics(d)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().ok().flatten())
+            .collect()
     })
 }
 
@@ -1371,7 +1561,9 @@ fn read_smart_uncached(d: &Device) -> Option<smartctl::SmartData> {
     // smartctl reports an error for e.g. a failed self-test-log read while
     // the health data is complete: keep it then.
     let smartctl = smartctl.map(|mut s| {
-        if s.error.is_some() && (s.power_on_hours.is_some() || s.temperature_c.is_some() || !s.attributes.is_empty()) {
+        if s.error.is_some()
+            && (s.power_on_hours.is_some() || s.temperature_c.is_some() || !s.attributes.is_empty())
+        {
             s.error = None;
         }
         s
@@ -1400,10 +1592,7 @@ pub fn device_json_basic(d: &Device) -> crate::json::Json {
         partitions.push(crate::json::object(vec![
             ("path", crate::json::string(p.path.clone())),
             ("size_bytes", crate::json::num(p.size_bytes as f64)),
-            (
-                "filesystem",
-                opt_json(&p.filesystem),
-            ),
+            ("filesystem", opt_json(&p.filesystem)),
             ("mountpoint", opt_json(&p.mountpoint)),
         ]));
     }
@@ -1416,7 +1605,10 @@ pub fn device_json_basic(d: &Device) -> crate::json::Json {
         ("type", crate::json::string(crate::virt::kind_label(d))),
         ("removable", crate::json::Json::Bool(d.removable)),
         ("capacity_bytes", crate::json::num(d.size_bytes as f64)),
-        ("logical_block_size", crate::json::num(d.logical_block_size as f64)),
+        (
+            "logical_block_size",
+            crate::json::num(d.logical_block_size as f64),
+        ),
         ("partitions", crate::json::Json::Arr(partitions)),
     ])
 }
@@ -1424,7 +1616,10 @@ pub fn device_json_basic(d: &Device) -> crate::json::Json {
 /// Full device object including identity, interface and health.
 pub fn device_json(d: &Device) -> crate::json::Json {
     let smart = read_smart(d);
-    let nid = if smart.as_ref().is_some_and(|s| s.model.is_some() && s.serial.is_some() && s.firmware.is_some()) {
+    let nid = if smart
+        .as_ref()
+        .is_some_and(|s| s.model.is_some() && s.serial.is_some() && s.firmware.is_some())
+    {
         crate::native::IdInfo::default()
     } else {
         crate::native::identity(d)
@@ -1458,21 +1653,46 @@ pub fn device_json(d: &Device) -> crate::json::Json {
             ("source", crate::json::string(s.source.clone())),
             ("passed", opt_bool(s.passed)),
             ("temperature_c", opt_num(s.temperature_c.map(|v| v as f64))),
-            ("power_on_hours", opt_num(s.power_on_hours.map(|v| v as f64))),
+            (
+                "power_on_hours",
+                opt_num(s.power_on_hours.map(|v| v as f64)),
+            ),
             ("power_cycles", opt_num(s.power_cycles.map(|v| v as f64))),
             ("written_bytes", opt_num(h.tbw_bytes.map(|v| v as f64))),
             ("read_bytes", opt_num(s.bytes_read().map(|v| v as f64))),
-            ("wear_used_percent", opt_num(h.wear_used_percent.map(|v| v as f64))),
+            (
+                "wear_used_percent",
+                opt_num(h.wear_used_percent.map(|v| v as f64)),
+            ),
             ("media_errors", opt_num(s.media_errors.map(|v| v as f64))),
-            ("available_spare", opt_num(s.available_spare.map(|v| v as f64))),
-            ("warning_temp_time", opt_num(s.warning_temp_time.map(|v| v as f64))),
-            ("critical_temp_time", opt_num(s.critical_temp_time.map(|v| v as f64))),
-            ("rated_tbw_bytes", opt_num(h.rated_tbw_bytes.map(|v| v as f64))),
-            ("rated_tbw_source", h.rated_tbw_source.map_or(crate::json::Json::Null, crate::json::string)),
+            (
+                "available_spare",
+                opt_num(s.available_spare.map(|v| v as f64)),
+            ),
+            (
+                "warning_temp_time",
+                opt_num(s.warning_temp_time.map(|v| v as f64)),
+            ),
+            (
+                "critical_temp_time",
+                opt_num(s.critical_temp_time.map(|v| v as f64)),
+            ),
+            (
+                "rated_tbw_bytes",
+                opt_num(h.rated_tbw_bytes.map(|v| v as f64)),
+            ),
+            (
+                "rated_tbw_source",
+                h.rated_tbw_source
+                    .map_or(crate::json::Json::Null, crate::json::string),
+            ),
             ("reallocated", opt_num(s.reallocated.map(|v| v as f64))),
             ("pending", opt_num(s.pending.map(|v| v as f64))),
             ("uncorrectable", opt_num(s.uncorrectable.map(|v| v as f64))),
-            ("non_medium_errors", opt_num(s.non_medium_errors.map(|v| v as f64))),
+            (
+                "non_medium_errors",
+                opt_num(s.non_medium_errors.map(|v| v as f64)),
+            ),
             (
                 "manufactured",
                 match s.manufactured {
@@ -1480,16 +1700,40 @@ pub fn device_json(d: &Device) -> crate::json::Json {
                     None => crate::json::Json::Null,
                 },
             ),
-            ("start_stop_cycles_rated", opt_num(s.rated_start_stop.map(|v| v as f64))),
-            ("load_unload_cycles", opt_num(s.load_unload.map(|v| v as f64))),
-            ("load_unload_cycles_rated", opt_num(s.rated_load_unload.map(|v| v as f64))),
-            ("trip_temperature_c", opt_num(s.trip_temp_c.map(|v| v as f64))),
+            (
+                "start_stop_cycles_rated",
+                opt_num(s.rated_start_stop.map(|v| v as f64)),
+            ),
+            (
+                "load_unload_cycles",
+                opt_num(s.load_unload.map(|v| v as f64)),
+            ),
+            (
+                "load_unload_cycles_rated",
+                opt_num(s.rated_load_unload.map(|v| v as f64)),
+            ),
+            (
+                "trip_temperature_c",
+                opt_num(s.trip_temp_c.map(|v| v as f64)),
+            ),
             ("temperature_min_c", opt_num(s.temp_min_c.map(|v| v as f64))),
             ("temperature_max_c", opt_num(s.temp_max_c.map(|v| v as f64))),
-            ("temperature_rated_max_c", opt_num(s.temp_rated_max_c.map(|v| v as f64))),
-            ("power_on_resets", opt_num(s.power_on_resets.map(|v| v as f64))),
-            ("hardware_resets", opt_num(s.hardware_resets.map(|v| v as f64))),
-            ("error_log_entries", opt_num(s.error_log_count.map(|v| v as f64))),
+            (
+                "temperature_rated_max_c",
+                opt_num(s.temp_rated_max_c.map(|v| v as f64)),
+            ),
+            (
+                "power_on_resets",
+                opt_num(s.power_on_resets.map(|v| v as f64)),
+            ),
+            (
+                "hardware_resets",
+                opt_num(s.hardware_resets.map(|v| v as f64)),
+            ),
+            (
+                "error_log_entries",
+                opt_num(s.error_log_count.map(|v| v as f64)),
+            ),
             ("trim", opt_bool(s.trim)),
             ("write_cache", opt_bool(s.write_cache)),
             ("last_self_test", opt_json(&s.last_self_test)),
@@ -1505,26 +1749,48 @@ pub fn device_json(d: &Device) -> crate::json::Json {
                     None => crate::json::Json::Null,
                 },
             ),
-            ("design_life_used_percent", opt_num(h.design_life_used.map(|v| v as f64))),
-            ("design_life_hours", opt_num(h.design_hours.map(|v| v as f64))),
+            (
+                "design_life_used_percent",
+                opt_num(h.design_life_used.map(|v| v as f64)),
+            ),
+            (
+                "design_life_hours",
+                opt_num(h.design_hours.map(|v| v as f64)),
+            ),
             (
                 "design_life_assumed",
-                if h.design_hours.is_some() { crate::json::Json::Bool(true) } else { crate::json::Json::Null },
+                if h.design_hours.is_some() {
+                    crate::json::Json::Bool(true)
+                } else {
+                    crate::json::Json::Null
+                },
             ),
-            ("design_life_limit", opt_json(&h.design_limit.map(str::to_string))),
+            (
+                "design_life_limit",
+                opt_json(&h.design_limit.map(str::to_string)),
+            ),
             ("life_basis", opt_json(&h.life_basis.map(str::to_string))),
-            ("remaining_hours", opt_num(h.remaining_poh.map(|v| v as f64))),
+            (
+                "remaining_hours",
+                opt_num(h.remaining_poh.map(|v| v as f64)),
+            ),
             ("life_days_247", opt_num(h.days_247.map(|v| v as f64))),
             ("life_days_87", opt_num(h.days_87.map(|v| v as f64))),
             ("confidence", crate::json::string(h.confidence.label())),
             ("issues", {
-                let v: Vec<crate::json::Json> =
-                    h.issues.iter().map(|i| crate::json::string(i.clone())).collect();
+                let v: Vec<crate::json::Json> = h
+                    .issues
+                    .iter()
+                    .map(|i| crate::json::string(i.clone()))
+                    .collect();
                 crate::json::Json::Arr(v)
             }),
             ("notes", {
-                let v: Vec<crate::json::Json> =
-                    h.notes.iter().map(|n| crate::json::string(n.clone())).collect();
+                let v: Vec<crate::json::Json> = h
+                    .notes
+                    .iter()
+                    .map(|n| crate::json::string(n.clone()))
+                    .collect();
                 crate::json::Json::Arr(v)
             }),
         ])
@@ -1546,7 +1812,10 @@ pub fn device_json(d: &Device) -> crate::json::Json {
             ("link_speed", opt_json(&link_speed)),
         ]),
     );
-    map.insert("health".to_string(), health.unwrap_or(crate::json::Json::Null));
+    map.insert(
+        "health".to_string(),
+        health.unwrap_or(crate::json::Json::Null),
+    );
     map.insert(
         "authenticity".to_string(),
         crate::authenticity::to_json(&crate::authenticity::for_device(
@@ -1624,8 +1893,14 @@ mod tests {
             ..Default::default()
         };
         let line = in_service(&s, Some(14.5)).unwrap();
-        assert!(line.starts_with("25660 h powered on ≈ 2.9 y @24/7, 40 power-on resets"), "{line}");
-        assert!(line.ends_with("on 20% of the time since manufacture"), "{line}");
+        assert!(
+            line.starts_with("25660 h powered on ≈ 2.9 y @24/7, 40 power-on resets"),
+            "{line}"
+        );
+        assert!(
+            line.ends_with("on 20% of the time since manufacture"),
+            "{line}"
+        );
         let d = crate::enumerate::demo_devices().remove(1); // SATA
         assert!(manufacture_unknown(&d, &s).contains("SATA/NVMe"));
         // A SATA SSD behind a SAS/RAID controller shows up on the SCSI bus.
@@ -1637,7 +1912,10 @@ mod tests {
         };
         assert!(manufacture_unknown(&behind_raid, &ata).contains("SATA/NVMe"));
         let sas = crate::smartctl::SmartData::default();
-        assert_eq!(manufacture_unknown(&behind_raid, &sas), "not reported by the drive");
+        assert_eq!(
+            manufacture_unknown(&behind_raid, &sas),
+            "not reported by the drive"
+        );
     }
 
     #[test]
@@ -1651,7 +1929,11 @@ mod tests {
         };
         let h = health::evaluate(&d, &s);
         // Not capped: 1% in 2785 h projects ~31 years at 24/7.
-        assert!(life_left(&h).unwrap().starts_with("~31."), "{:?}", life_left(&h));
+        assert!(
+            life_left(&h).unwrap().starts_with("~31."),
+            "{:?}",
+            life_left(&h)
+        );
 
         let s = crate::smartctl::SmartData {
             passed: Some(true),
@@ -1663,7 +1945,10 @@ mod tests {
         let h = health::evaluate(&hdd, &s);
         // 91,992 h vs a 43,800 h design life: ~5.5 y over.
         let text = life_left(&h).unwrap();
-        assert!(text.starts_with("0 — past its rated life by ~5.5y"), "{text}");
+        assert!(
+            text.starts_with("0 — past its rated life by ~5.5y"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1806,6 +2091,9 @@ mod tests {
         let mut failed = list_dev();
         failed.failure = Some("reset failed, giving up".into());
         let text = prometheus_lines(std::slice::from_ref(&failed), &[None]);
-        assert!(text.contains("dcheck_device_failed{device=\"/dev/sda\"} 1"), "{text}");
+        assert!(
+            text.contains("dcheck_device_failed{device=\"/dev/sda\"} 1"),
+            "{text}"
+        );
     }
 }

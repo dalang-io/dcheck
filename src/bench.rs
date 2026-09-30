@@ -60,7 +60,9 @@ pub fn run(path: &str, device_bytes: u64) -> Option<String> {
     let start = std::time::Instant::now();
     let iterations = 2000u32;
     for _ in 0..iterations {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let off = (seed % span) & !4095u64;
         let _ = file.read_at(buf4, off);
     }

@@ -80,7 +80,10 @@ pub enum Bad {
 impl Bad {
     fn describe(self) -> String {
         match self {
-            Bad::Wrapped(i) => format!("held the data written for {}", human_size_bin(i * BLOCK as u64)),
+            Bad::Wrapped(i) => format!(
+                "held the data written for {}",
+                human_size_bin(i * BLOCK as u64)
+            ),
             Bad::Zeros => "read back as zeros".into(),
             Bad::Stale => "still held data from an earlier run (the write never landed)".into(),
             Bad::Garbage => "read back corrupted".into(),
@@ -199,7 +202,13 @@ struct Progress {
 
 impl Progress {
     fn new() -> Self {
-        Progress { tty: io::stderr().is_terminal(), phase: "", open: false, start: Instant::now(), last: -10.0 }
+        Progress {
+            tty: io::stderr().is_terminal(),
+            phase: "",
+            open: false,
+            start: Instant::now(),
+            last: -10.0,
+        }
     }
 
     fn show(&mut self, phase: &'static str, done: u64, total: u64) {
@@ -216,7 +225,11 @@ impl Progress {
         }
         self.last = t;
         let rate = done as f64 / t.max(0.001);
-        let eta = if rate > 0.0 { (total.saturating_sub(done)) as f64 / rate } else { 0.0 };
+        let eta = if rate > 0.0 {
+            (total.saturating_sub(done)) as f64 / rate
+        } else {
+            0.0
+        };
         let line = format!(
             "  {phase:<8} {} / {}  {:>10}  ETA {}",
             human_size_bin(done),
@@ -291,7 +304,10 @@ pub fn reset_stop() {
 }
 
 fn run(t: &mut dyn Target, total: u64, seed: u64, progress: OnProgress) -> Outcome {
-    let mut out = Outcome { planned: total, ..Default::default() };
+    let mut out = Outcome {
+        planned: total,
+        ..Default::default()
+    };
     let region = region_size(total);
     let mut buf = vec![0u8; CHUNK];
     let mut scratch = vec![0u8; BLOCK];
@@ -355,12 +371,17 @@ fn run(t: &mut dyn Target, total: u64, seed: u64, progress: OnProgress) -> Outco
     while off < out.written && !STOP.load(Ordering::Relaxed) {
         let n = ((out.written - off).min(CHUNK as u64) as usize) / BLOCK * BLOCK;
         if let Err(e) = t.read_at(off, &mut buf[..n]) {
-            out.error.get_or_insert(format!("read at {}: {e}", human_size_bin(off)));
+            out.error
+                .get_or_insert(format!("read at {}: {e}", human_size_bin(off)));
             break;
         }
         stats.check_chunk(&buf[..n], seed, off / BLOCK as u64, &mut scratch);
         out.read += n as u64;
-        off += if out.early_stop { region.max(n as u64) } else { n as u64 };
+        off += if out.early_stop {
+            region.max(n as u64)
+        } else {
+            n as u64
+        };
         progress("reading", off.min(out.written), out.written);
     }
     if STOP.load(Ordering::Relaxed) {
@@ -379,7 +400,11 @@ pub fn data_signatures(head: &[u8]) -> Vec<&'static str> {
     let mut v = Vec::new();
     if at(512, b"EFI PART") {
         v.push("GPT partition table");
-    } else if at(510, &[0x55, 0xAA]) && head.get(446..510).is_some_and(|t| t.iter().any(|b| *b != 0)) {
+    } else if at(510, &[0x55, 0xAA])
+        && head
+            .get(446..510)
+            .is_some_and(|t| t.iter().any(|b| *b != 0))
+    {
         v.push("MBR partition table");
     }
     for (off, magic, name) in [
@@ -508,7 +533,11 @@ pub fn demo_plan(d: &crate::model::Device, fake: bool) -> Plan {
 }
 
 /// Run a plan: the real test, or the in-memory simulation for demos.
-pub fn run_plan(p: &Plan, total: u64, progress: OnProgress) -> Result<(Outcome, Option<String>), String> {
+pub fn run_plan(
+    p: &Plan,
+    total: u64,
+    progress: OnProgress,
+) -> Result<(Outcome, Option<String>), String> {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|t| t.as_nanos() as u64)
@@ -626,21 +655,41 @@ pub fn outcome_lines(target: &str, o: &Outcome, device_mode: bool) -> (Vec<Strin
     out.push(format!(
         "  Read back    : {}{}  ({})",
         human_size_bin(o.read),
-        if o.early_stop { " (sampled after the early stop)" } else { "" },
+        if o.early_stop {
+            " (sampled after the early stop)"
+        } else {
+            ""
+        },
         mbps(o.read, o.read_secs)
     ));
     let s = &o.stats;
     if s.bad > 0 {
-        out.push(format!("  Result       : FAIL — {} of {} checked blocks are bad", s.bad, s.checked));
+        out.push(format!(
+            "  Result       : FAIL — {} of {} checked blocks are bad",
+            s.bad, s.checked
+        ));
         if let Some((idx, b)) = s.first_bad {
-            out.push(format!("  First bad    : the block at {} {}", human_size_bin(idx * BLOCK as u64), b.describe()));
+            out.push(format!(
+                "  First bad    : the block at {} {}",
+                human_size_bin(idx * BLOCK as u64),
+                b.describe()
+            ));
         }
         if s.wrapped > 0 {
-            out.push(format!("  Wrap-around  : {} block(s) hold data written for a higher address", s.wrapped));
+            out.push(format!(
+                "  Wrap-around  : {} block(s) hold data written for a higher address",
+                s.wrapped
+            ));
             if let (true, Some(d)) = (device_mode, s.wrap_distance) {
-                out.push(format!("  Real size    : about {} (addresses repeat every that much)", human_size_bin(d * BLOCK as u64)));
+                out.push(format!(
+                    "  Real size    : about {} (addresses repeat every that much)",
+                    human_size_bin(d * BLOCK as u64)
+                ));
             }
-            out.push("  Meaning      : the drive stores less than it reports — counterfeit capacity.".into());
+            out.push(
+                "  Meaning      : the drive stores less than it reports — counterfeit capacity."
+                    .into(),
+            );
         } else {
             out.push("  Meaning      : data written to the drive does not come back — fake capacity or failing media.".into());
         }
@@ -655,7 +704,10 @@ pub fn outcome_lines(target: &str, o: &Outcome, device_mode: bool) -> (Vec<Strin
         out.push("  Result       : ABORTED — no bad blocks in what was checked".into());
         return (out, 1);
     }
-    out.push(format!("  Result       : PASS — all {} read back intact", human_size_bin(o.read)));
+    out.push(format!(
+        "  Result       : PASS — all {} read back intact",
+        human_size_bin(o.read)
+    ));
     if !device_mode && o.written < o.planned {
         out.push("  Note         : the filesystem filled up before the planned size".into());
     }
@@ -735,7 +787,13 @@ mod unix_impl {
         fn file(&mut self, idx: usize) -> io::Result<&File> {
             while self.files.len() <= idx {
                 let p = self.dir.join(format!("{:05}.dat", self.files.len()));
-                self.files.push(OpenOptions::new().read(true).write(true).create_new(true).open(p)?);
+                self.files.push(
+                    OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(p)?,
+                );
             }
             Ok(&self.files[idx])
         }
@@ -782,15 +840,26 @@ mod unix_impl {
     }
 
     /// Write, read back and delete the test files.
-    pub fn execute(plan: &Plan, total: u64, seed: u64, progress: OnProgress) -> Result<(Outcome, Option<String>), String> {
+    pub fn execute(
+        plan: &Plan,
+        total: u64,
+        seed: u64,
+        progress: OnProgress,
+    ) -> Result<(Outcome, Option<String>), String> {
         let tdir = Path::new(&plan.base).join(format!(".dcheck-verify-{}", std::process::id()));
         fs::create_dir(&tdir).map_err(|e| format!("cannot create {}: {e}", tdir.display()))?;
-        let mut files = Files { dir: tdir.clone(), files: Vec::new() };
+        let mut files = Files {
+            dir: tdir.clone(),
+            files: Vec::new(),
+        };
         let o = run(&mut files, total, seed, progress);
         drop(files);
-        let cleanup = fs::remove_dir_all(&tdir)
-            .err()
-            .map(|e| format!("could not remove {}: {e} — delete it by hand", tdir.display()));
+        let cleanup = fs::remove_dir_all(&tdir).err().map(|e| {
+            format!(
+                "could not remove {}: {e} — delete it by hand",
+                tdir.display()
+            )
+        });
         Ok((o, cleanup))
     }
 }
@@ -833,7 +902,11 @@ mod imp {
         let real = fs::canonicalize(arg).ok()?;
         let name = real.file_name()?.to_str()?.to_string();
         let sys = Path::new("/sys/class/block").join(&name);
-        let sectors: u64 = fs::read_to_string(sys.join("size")).ok()?.trim().parse().ok()?;
+        let sectors: u64 = fs::read_to_string(sys.join("size"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
         Some(Device {
             name,
             path: real.to_string_lossy().into_owned(),
@@ -869,26 +942,47 @@ mod imp {
             let dev = format!("/dev/{n}");
             for line in mounts.lines() {
                 let mut it = line.split_whitespace();
-                let (Some(src), Some(mp)) = (it.next(), it.next()) else { continue };
-                let src_real = fs::canonicalize(src).ok().map(|p| p.to_string_lossy().into_owned());
+                let (Some(src), Some(mp)) = (it.next(), it.next()) else {
+                    continue;
+                };
+                let src_real = fs::canonicalize(src)
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned());
                 if src == dev || src_real.as_deref() == Some(dev.as_str()) {
                     return Some(format!("{dev} is mounted on {mp}"));
                 }
             }
-            if swaps.lines().any(|l| l.split_whitespace().next() == Some(dev.as_str())) {
+            if swaps
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some(dev.as_str()))
+            {
                 return Some(format!("{dev} is used as swap"));
             }
             let holders = fs::read_dir(format!("/sys/class/block/{n}/holders"))
-                .map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>())
+                .map(|r| {
+                    r.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
             if !holders.is_empty() {
-                return Some(format!("{dev} is held by {} (LVM / RAID / device-mapper)", holders.join(", ")));
+                return Some(format!(
+                    "{dev} is held by {} (LVM / RAID / device-mapper)",
+                    holders.join(", ")
+                ));
             }
         }
         None
     }
 
-    pub fn run_cmd(arg: &str, size: Option<u64>, dir: Option<String>, yes: bool, destructive: bool, full: bool) -> i32 {
+    pub fn run_cmd(
+        arg: &str,
+        size: Option<u64>,
+        dir: Option<String>,
+        yes: bool,
+        destructive: bool,
+        full: bool,
+    ) -> i32 {
         if !crate::native::is_root() && destructive {
             eprintln!("dcheck: --destructive needs root");
             return 1;
@@ -923,7 +1017,10 @@ mod imp {
                 Err(_) => Vec::new(),
             }
         };
-        let mut out: Vec<String> = head(&d.path).iter().map(|s| format!("{}: {s}", d.path)).collect();
+        let mut out: Vec<String> = head(&d.path)
+            .iter()
+            .map(|s| format!("{}: {s}", d.path))
+            .collect();
         let mut parts: Vec<String> = fs::read_dir(format!("/sys/class/block/{}", d.name))
             .map(|r| {
                 r.flatten()
@@ -940,7 +1037,11 @@ mod imp {
                 .map(|s| human_size_bin(s * 512))
                 .unwrap_or_default();
             let sig = head(&format!("/dev/{p}"));
-            let what = if sig.is_empty() { "partition".to_string() } else { sig.join(", ") };
+            let what = if sig.is_empty() {
+                "partition".to_string()
+            } else {
+                sig.join(", ")
+            };
             out.push(format!("/dev/{p}: {what} {size}"));
         }
         out
@@ -957,8 +1058,16 @@ mod imp {
         }
         let total = size.unwrap_or(d.size_bytes).min(d.size_bytes);
         let total = total - total % BLOCK as u64;
-        eprintln!("\n  !! {} ({}, {}) will be OVERWRITTEN: every partition and file on it is lost.", d.path, d.label(), human_size_bin(d.size_bytes));
-        eprintln!("  !! {} will be written, then read back.", human_size_bin(total));
+        eprintln!(
+            "\n  !! {} ({}, {}) will be OVERWRITTEN: every partition and file on it is lost.",
+            d.path,
+            d.label(),
+            human_size_bin(d.size_bytes)
+        );
+        eprintln!(
+            "  !! {} will be written, then read back.",
+            human_size_bin(total)
+        );
         let found = contents(d);
         if found.is_empty() {
             eprintln!("  No partitions or filesystem signatures found (looks empty).");
@@ -969,7 +1078,11 @@ mod imp {
             }
         }
         // An empty drive: its name. A drive with data: "ERASE <name>".
-        let want = if found.is_empty() { d.name.clone() } else { format!("ERASE {}", d.name) };
+        let want = if found.is_empty() {
+            d.name.clone()
+        } else {
+            format!("ERASE {}", d.name)
+        };
         eprint!("  Type \"{want}\" to continue (anything else cancels): ");
         let _ = io::stderr().flush();
         let mut line = String::new();
@@ -977,7 +1090,12 @@ mod imp {
             eprintln!("dcheck: not confirmed, nothing written");
             return 1;
         }
-        let f = match OpenOptions::new().read(true).write(true).custom_flags(O_EXCL).open(&d.path) {
+        let f = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(O_EXCL)
+            .open(&d.path)
+        {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("dcheck: cannot open {} exclusively: {e} (in use?)", d.path);
@@ -986,7 +1104,9 @@ mod imp {
         };
         eprintln!();
         let mut prog = Progress::new();
-        let o = run(&mut Raw(f), total, seed, &mut |ph, d, t| prog.show(ph, d, t));
+        let o = run(&mut Raw(f), total, seed, &mut |ph, d, t| {
+            prog.show(ph, d, t)
+        });
         prog.end();
         print_outcome(&format!("{} (raw device, destructive)", d.path), &o, true)
     }
@@ -999,7 +1119,11 @@ mod imp {
             None => d
                 .partitions
                 .iter()
-                .filter_map(|p| p.mountpoint.as_ref().map(|m| (m.clone(), crate::mount::usage(m))))
+                .filter_map(|p| {
+                    p.mountpoint
+                        .as_ref()
+                        .map(|m| (m.clone(), crate::mount::usage(m)))
+                })
                 .filter_map(|(m, u)| u.map(|u| (m, u.avail)))
                 .max_by_key(|(_, a)| *a)
                 .map(|(m, _)| PathBuf::from(m))
@@ -1013,7 +1137,17 @@ mod imp {
         };
         let u = crate::mount::usage(&base.to_string_lossy())
             .ok_or_else(|| format!("cannot read free space of {}", base.display()))?;
-        const SYSTEM: &[&str] = &["/", "/boot", "/boot/efi", "/usr", "/var", "/home", "/srv", "/opt", "/tmp"];
+        const SYSTEM: &[&str] = &[
+            "/",
+            "/boot",
+            "/boot/efi",
+            "/usr",
+            "/var",
+            "/home",
+            "/srv",
+            "/opt",
+            "/tmp",
+        ];
         let system = d
             .partitions
             .iter()
@@ -1042,7 +1176,14 @@ mod imp {
         })
     }
 
-    fn free_space_run(d: &Device, size: Option<u64>, dir: Option<String>, yes: bool, full: bool, seed: u64) -> i32 {
+    fn free_space_run(
+        d: &Device,
+        size: Option<u64>,
+        dir: Option<String>,
+        yes: bool,
+        full: bool,
+        seed: u64,
+    ) -> i32 {
         let plan = match plan(d, dir) {
             Ok(p) => p,
             Err(e) => {
@@ -1081,7 +1222,11 @@ mod imp {
         prog.end();
         match result {
             Ok((o, cleanup)) => {
-                let code = print_outcome(&format!("{} (free space, test files)", plan.base), &o, false);
+                let code = print_outcome(
+                    &format!("{} (free space, test files)", plan.base),
+                    &o,
+                    false,
+                );
                 if let Some(e) = cleanup {
                     eprintln!("dcheck: {e}");
                 }
@@ -1141,7 +1286,9 @@ mod imp {
 
     /// `df -P -k` as (device, mountpoint) pairs.
     fn mounted_volumes() -> Vec<(String, String)> {
-        let Ok(out) = Command::new("df").args(["-P", "-k"]).output() else { return Vec::new() };
+        let Ok(out) = Command::new("df").args(["-P", "-k"]).output() else {
+            return Vec::new();
+        };
         parse_df_mounts(&String::from_utf8_lossy(&out.stdout))
     }
 
@@ -1163,7 +1310,9 @@ mod imp {
                 mounted_volumes()
                     .into_iter()
                     .filter(|(dev, _)| *dev == d.path || dev.starts_with(&prefix))
-                    .filter_map(|(_, mp)| crate::mount::usage(&mp).map(|u| (PathBuf::from(mp), u.avail)))
+                    .filter_map(|(_, mp)| {
+                        crate::mount::usage(&mp).map(|u| (PathBuf::from(mp), u.avail))
+                    })
                     .max_by_key(|(_, a)| *a)
                     .map(|(p, _)| p)
                     .ok_or_else(|| {
@@ -1200,7 +1349,14 @@ mod imp {
         })
     }
 
-    fn free_space_run(d: &Device, size: Option<u64>, dir: Option<String>, yes: bool, full: bool, seed: u64) -> i32 {
+    fn free_space_run(
+        d: &Device,
+        size: Option<u64>,
+        dir: Option<String>,
+        yes: bool,
+        full: bool,
+        seed: u64,
+    ) -> i32 {
         let plan = match plan(d, dir) {
             Ok(p) => p,
             Err(e) => {
@@ -1238,7 +1394,11 @@ mod imp {
         prog.end();
         match result {
             Ok((o, cleanup)) => {
-                let code = print_outcome(&format!("{} (free space, test files)", plan.base), &o, false);
+                let code = print_outcome(
+                    &format!("{} (free space, test files)", plan.base),
+                    &o,
+                    false,
+                );
                 if let Some(e) = cleanup {
                     eprintln!("dcheck: {e}");
                 }
@@ -1251,7 +1411,14 @@ mod imp {
         }
     }
 
-    pub fn run_cmd(arg: &str, size: Option<u64>, dir: Option<String>, yes: bool, destructive: bool, full: bool) -> i32 {
+    pub fn run_cmd(
+        arg: &str,
+        size: Option<u64>,
+        dir: Option<String>,
+        yes: bool,
+        destructive: bool,
+        full: bool,
+    ) -> i32 {
         if destructive {
             eprintln!(
                 "dcheck: --destructive is Linux-only (it flushes raw block devices with a Linux ioctl);\n\
@@ -1285,7 +1452,13 @@ mod imp {
                         /dev/disk3s1s1 1000 400 500 45% /\n\
                         /dev/disk5s2 2000 100 1900 5% /Volumes/USB\n";
             let v = parse_df_mounts(text);
-            assert_eq!(v, vec![("/dev/disk3s1s1".to_string(), "/".to_string()), ("/dev/disk5s2".to_string(), "/Volumes/USB".to_string())]);
+            assert_eq!(
+                v,
+                vec![
+                    ("/dev/disk3s1s1".to_string(), "/".to_string()),
+                    ("/dev/disk5s2".to_string(), "/Volumes/USB".to_string())
+                ]
+            );
             // A whole-disk device matches its partitions by the `diskNs` prefix.
             assert!(v.iter().any(|(dev, _)| dev.starts_with("/dev/disk5")));
             assert!(SYSTEM.contains(&"/"));
@@ -1305,7 +1478,12 @@ mod imp {
         Err("verify is not implemented on this platform yet (Linux and macOS are)".into())
     }
 
-    pub fn execute(_: &Plan, _: u64, _: u64, _: OnProgress) -> Result<(Outcome, Option<String>), String> {
+    pub fn execute(
+        _: &Plan,
+        _: u64,
+        _: u64,
+        _: OnProgress,
+    ) -> Result<(Outcome, Option<String>), String> {
         Err("verify is not implemented on this platform yet (Linux and macOS are)".into())
     }
 
@@ -1320,7 +1498,12 @@ mod tests {
     use super::*;
 
     fn fake(real: u64, reported: u64, discard: bool) -> SimTarget {
-        SimTarget { mem: vec![0; real as usize], reported, discard, delay: std::time::Duration::ZERO }
+        SimTarget {
+            mem: vec![0; real as usize],
+            reported,
+            discard,
+            delay: std::time::Duration::ZERO,
+        }
     }
 
     fn run_quiet(t: &mut SimTarget, total: u64) -> Outcome {
@@ -1337,7 +1520,10 @@ mod tests {
         assert_eq!(check_block(&a, 7, 42, &mut scratch), None);
         assert_eq!(check_block(&a, 7, 41, &mut scratch), Some(Bad::Wrapped(42)));
         assert_eq!(check_block(&a, 8, 42, &mut scratch), Some(Bad::Stale));
-        assert_eq!(check_block(&[0u8; BLOCK], 7, 42, &mut scratch), Some(Bad::Zeros));
+        assert_eq!(
+            check_block(&[0u8; BLOCK], 7, 42, &mut scratch),
+            Some(Bad::Zeros)
+        );
         a[100] ^= 1;
         assert_eq!(check_block(&a, 7, 42, &mut scratch), Some(Bad::Garbage));
         // Different blocks get different patterns.
@@ -1365,7 +1551,10 @@ mod tests {
         assert!(o.stats.wrapped > 0);
         assert!(o.early_stop);
         assert!(o.written < 128 << 20, "stopped at {}", o.written);
-        assert_eq!(o.stats.wrap_distance.map(|d| d * BLOCK as u64), Some(48 << 20));
+        assert_eq!(
+            o.stats.wrap_distance.map(|d| d * BLOCK as u64),
+            Some(48 << 20)
+        );
     }
 
     #[test]
@@ -1415,6 +1604,9 @@ mod tests {
         assert_eq!(parse_size("abc"), None);
         assert_eq!(region_size(100 << 20), 16 << 20);
         assert_eq!(region_size(1 << 40), 1 << 30);
-        assert_eq!(spot_offsets(0, 16 << 20, 16 << 20), vec![0, (16 << 20) - (4 << 20)]);
+        assert_eq!(
+            spot_offsets(0, 16 << 20, 16 << 20),
+            vec![0, (16 << 20) - (4 << 20)]
+        );
     }
 }

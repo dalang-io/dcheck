@@ -254,7 +254,9 @@ pub fn parse_ids(text: &str, wanted: &[(u16, u16)]) -> HashMap<(u16, Option<u16>
             break; // class section
         }
         if !line.starts_with('\t') {
-            cur = u16::from_str_radix(line.get(..4).unwrap_or(""), 16).ok().filter(|v| vendors.contains(v));
+            cur = u16::from_str_radix(line.get(..4).unwrap_or(""), 16)
+                .ok()
+                .filter(|v| vendors.contains(v));
             if let Some(v) = cur {
                 out.insert((v, None), line[4..].trim().to_string());
             }
@@ -270,7 +272,10 @@ pub fn parse_ids(text: &str, wanted: &[(u16, u16)]) -> HashMap<(u16, Option<u16>
 }
 
 fn read_str(p: &Path) -> Option<String> {
-    std::fs::read_to_string(p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::fs::read_to_string(p)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn hex_u(p: &Path) -> Option<u64> {
@@ -289,14 +294,28 @@ fn aer_total(p: &Path) -> Option<u64> {
         .find(|l| l.starts_with("TOTAL_ERR"))
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|v| v.parse().ok())
-        .or_else(|| Some(t.lines().filter_map(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()).sum()))
+        .or_else(|| {
+            Some(
+                t.lines()
+                    .filter_map(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+                    .sum(),
+            )
+        })
 }
 
 /// Parse a DMI date "MM/DD/YYYY".
 pub fn parse_bios_date(s: &str) -> Option<(u16, u8, u8)> {
     let mut it = s.trim().split('/');
-    let (m, d, y) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?, it.next()?.parse::<u16>().ok()?);
-    let y = if y < 100 { 1900 + y + if y < 70 { 100 } else { 0 } } else { y };
+    let (m, d, y) = (
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+        it.next()?.parse::<u16>().ok()?,
+    );
+    let y = if y < 100 {
+        1900 + y + if y < 70 { 100 } else { 0 }
+    } else {
+        y
+    };
     (1..=12).contains(&m).then_some((y, m, d))
 }
 
@@ -314,7 +333,11 @@ pub fn fmt_time(t: u32) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", secs / 3600, (secs % 3600) / 60)
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60
+    )
 }
 
 fn now() -> u64 {
@@ -325,12 +348,22 @@ fn now() -> u64 {
 }
 
 /// Hwmon chips covered elsewhere (CPU, memory, disks).
-const OTHER_MODULES: &[&str] = &["coretemp", "k10temp", "zenpower", "nvme", "drivetemp", "jc42", "spd5118"];
+const OTHER_MODULES: &[&str] = &[
+    "coretemp",
+    "k10temp",
+    "zenpower",
+    "nvme",
+    "drivetemp",
+    "jc42",
+    "spd5118",
+];
 
 /// Board sensors from `/sys/class/hwmon`.
 pub fn hwmon_sensors(root: &Path) -> Vec<BoardSensor> {
     let mut out = Vec::new();
-    let Ok(rd) = std::fs::read_dir(root.join("sys/class/hwmon")) else { return out };
+    let Ok(rd) = std::fs::read_dir(root.join("sys/class/hwmon")) else {
+        return out;
+    };
     let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
     dirs.sort();
     for d in dirs {
@@ -340,11 +373,17 @@ pub fn hwmon_sensors(root: &Path) -> Vec<BoardSensor> {
         }
         let num = |f: &str| read_str(&d.join(f)).and_then(|v| v.parse::<f64>().ok());
         let mut files: Vec<String> = std::fs::read_dir(&d)
-            .map(|r| r.flatten().filter_map(|e| e.file_name().into_string().ok()).collect())
+            .map(|r| {
+                r.flatten()
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect()
+            })
             .unwrap_or_default();
         files.sort();
         for f in files {
-            let Some(base) = f.strip_suffix("_input") else { continue };
+            let Some(base) = f.strip_suffix("_input") else {
+                continue;
+            };
             let (kind, scale, unit) = match base.trim_end_matches(|c: char| c.is_ascii_digit()) {
                 "temp" => (Kind::Temp, 1000.0, "°C"),
                 "fan" => (Kind::Fan, 1.0, "RPM"),
@@ -380,8 +419,17 @@ pub fn hwmon_sensors(root: &Path) -> Vec<BoardSensor> {
                 }
                 _ => {}
             }
-            let label = read_str(&d.join(format!("{base}_label"))).unwrap_or_else(|| base.to_string());
-            out.push(BoardSensor { source: chip.clone(), name: label, kind, value: Some(v), unit, state: None, status });
+            let label =
+                read_str(&d.join(format!("{base}_label"))).unwrap_or_else(|| base.to_string());
+            out.push(BoardSensor {
+                source: chip.clone(),
+                name: label,
+                kind,
+                value: Some(v),
+                unit,
+                state: None,
+                status,
+            });
         }
         if num("intrusion0_alarm").is_some_and(|a| a > 0.0) {
             out.push(BoardSensor {
@@ -401,19 +449,35 @@ pub fn hwmon_sensors(root: &Path) -> Vec<BoardSensor> {
 /// PCI devices from sysfs; names from pci.ids when available.
 pub fn pci_devices(root: &Path) -> Vec<PciDev> {
     let base = root.join("sys/bus/pci/devices");
-    let Ok(rd) = std::fs::read_dir(&base) else { return Vec::new() };
-    let mut addrs: Vec<String> = rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+    let Ok(rd) = std::fs::read_dir(&base) else {
+        return Vec::new();
+    };
+    let mut addrs: Vec<String> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
     addrs.sort();
     let mut devs = Vec::new();
     for a in addrs {
         let d = base.join(&a);
-        let (Some(class), Some(v), Some(dv)) = (hex_u(&d.join("class")), hex_u(&d.join("vendor")), hex_u(&d.join("device"))) else {
+        let (Some(class), Some(v), Some(dv)) = (
+            hex_u(&d.join("class")),
+            hex_u(&d.join("vendor")),
+            hex_u(&d.join("device")),
+        ) else {
             continue;
         };
-        let driver = std::fs::read_link(d.join("driver")).ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+        let driver = std::fs::read_link(d.join("driver"))
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
         let w = |f: &str| read_str(&d.join(f)).and_then(|v| v.parse::<u8>().ok());
         let s = |f: &str| read_str(&d.join(f)).and_then(|v| gts(&v));
-        let link = match (s("current_link_speed"), w("current_link_width"), s("max_link_speed"), w("max_link_width")) {
+        let link = match (
+            s("current_link_speed"),
+            w("current_link_width"),
+            s("max_link_speed"),
+            w("max_link_width"),
+        ) {
             (Some(cs), Some(cw), Some(ms), Some(mw)) if cw > 0 && mw > 0 && mw < 64 => {
                 // The upstream port (parent directory) limits the width too.
                 let port_w = std::fs::canonicalize(&d)
@@ -422,7 +486,13 @@ pub fn pci_devices(root: &Path) -> Vec<PciDev> {
                     .and_then(|p| read_str(&p.join("max_link_width")))
                     .and_then(|v| v.parse::<u8>().ok())
                     .filter(|w| *w > 0 && *w < 64);
-                Some(Link { cur_gts: cs, cur_w: cw, max_gts: ms, max_w: mw, port_w })
+                Some(Link {
+                    cur_gts: cs,
+                    cur_w: cw,
+                    max_gts: ms,
+                    max_w: mw,
+                    port_w,
+                })
             }
             _ => None,
         };
@@ -435,19 +505,37 @@ pub fn pci_devices(root: &Path) -> Vec<PciDev> {
         } else {
             None
         };
-        devs.push(PciDev { addr: a, class: class as u32, vendor_id: v as u16, device_id: dv as u16, name: String::new(), driver, link, aer });
+        devs.push(PciDev {
+            addr: a,
+            class: class as u32,
+            vendor_id: v as u16,
+            device_id: dv as u16,
+            name: String::new(),
+            driver,
+            link,
+            aer,
+        });
     }
     let wanted: Vec<(u16, u16)> = devs.iter().map(|d| (d.vendor_id, d.device_id)).collect();
-    let ids = ["usr/share/hwdata/pci.ids", "usr/share/misc/pci.ids", "usr/share/pci.ids"]
-        .iter()
-        .find_map(|p| std::fs::read_to_string(root.join(p)).ok())
-        .map(|t| parse_ids(&t, &wanted))
-        .unwrap_or_default();
+    let ids = [
+        "usr/share/hwdata/pci.ids",
+        "usr/share/misc/pci.ids",
+        "usr/share/pci.ids",
+    ]
+    .iter()
+    .find_map(|p| std::fs::read_to_string(root.join(p)).ok())
+    .map(|t| parse_ids(&t, &wanted))
+    .unwrap_or_default();
     for d in &mut devs {
-        let vendor = ids.get(&(d.vendor_id, None)).cloned().unwrap_or_else(|| vendor_fallback(d.vendor_id).to_string());
+        let vendor = ids
+            .get(&(d.vendor_id, None))
+            .cloned()
+            .unwrap_or_else(|| vendor_fallback(d.vendor_id).to_string());
         d.name = match ids.get(&(d.vendor_id, Some(d.device_id))) {
             Some(n) => format!("{vendor} {n}").trim().to_string(),
-            None => format!("{vendor} {:04x}:{:04x}", d.vendor_id, d.device_id).trim().to_string(),
+            None => format!("{vendor} {:04x}:{:04x}", d.vendor_id, d.device_id)
+                .trim()
+                .to_string(),
         };
     }
     devs
@@ -455,22 +543,41 @@ pub fn pci_devices(root: &Path) -> Vec<PciDev> {
 
 pub fn usb_devices(root: &Path) -> Vec<UsbDev> {
     let base = root.join("sys/bus/usb/devices");
-    let Ok(rd) = std::fs::read_dir(&base) else { return Vec::new() };
-    let mut ids: Vec<String> = rd.flatten().filter_map(|e| e.file_name().into_string().ok()).collect();
+    let Ok(rd) = std::fs::read_dir(&base) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
     ids.sort();
     let mut out = Vec::new();
     for id in ids {
         let d = base.join(&id);
-        let (Some(v), Some(p)) = (hex_u(&d.join("idVendor")), hex_u(&d.join("idProduct"))) else { continue };
+        let (Some(v), Some(p)) = (hex_u(&d.join("idVendor")), hex_u(&d.join("idProduct"))) else {
+            continue;
+        };
         if v == 0x1d6b || read_str(&d.join("bDeviceClass")).as_deref() == Some("09") {
             continue; // root and internal hubs
         }
         let mf = read_str(&d.join("manufacturer")).unwrap_or_default();
         let prod = read_str(&d.join("product")).unwrap_or_default();
         let name = format!("{mf} {prod}").trim().to_string();
-        let name = if name.is_empty() { format!("{v:04x}:{p:04x}") } else { name };
-        let speed = read_str(&d.join("speed")).and_then(|s| s.parse().ok()).unwrap_or(0.0);
-        out.push(UsbDev { id, vendor_id: v as u16, product_id: p as u16, name, speed_mbps: speed });
+        let name = if name.is_empty() {
+            format!("{v:04x}:{p:04x}")
+        } else {
+            name
+        };
+        let speed = read_str(&d.join("speed"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        out.push(UsbDev {
+            id,
+            vendor_id: v as u16,
+            product_id: p as u16,
+            name,
+            speed_mbps: speed,
+        });
     }
     out
 }
@@ -491,7 +598,9 @@ pub fn read_from(root: &Path) -> BoardInfo {
             version: dmi("board_version"),
             serial: dmi("board_serial"),
         },
-        chassis: dmi("chassis_type").and_then(|c| c.parse().ok()).map(|c: u32| chassis_name(c).to_string()),
+        chassis: dmi("chassis_type")
+            .and_then(|c| c.parse().ok())
+            .map(|c: u32| chassis_name(c).to_string()),
         bios: Bios {
             vendor: dmi("bios_vendor"),
             version: dmi("bios_version"),
@@ -533,8 +642,20 @@ pub fn add_ipmi(b: &mut BoardInfo, i: crate::ipmi::Ipmi) {
             Some((v, _)) => (Some(v), unit),
             None => (None, ""),
         };
-        let kind = if s.kind == 0x08 || s.kind == 0x09 || unit == "W" { Kind::Power } else { kind };
-        b.sensors.push(BoardSensor { source: "IPMI".into(), name: s.name, kind, value, unit, state: s.state, status: s.status });
+        let kind = if s.kind == 0x08 || s.kind == 0x09 || unit == "W" {
+            Kind::Power
+        } else {
+            kind
+        };
+        b.sensors.push(BoardSensor {
+            source: "IPMI".into(),
+            name: s.name,
+            kind,
+            value,
+            unit,
+            state: s.state,
+            status: s.status,
+        });
     }
     b.events = i.events;
     b.sel_entries = i.sel_entries;
@@ -570,9 +691,16 @@ pub fn read() -> BoardInfo {
 
 #[cfg(target_os = "macos")]
 fn macos() -> BoardInfo {
-    let out = std::process::Command::new("system_profiler").args(["SPHardwareDataType", "-json"]).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    let mut b = BoardInfo { source: "system_profiler".into(), ..Default::default() };
+    let out = std::process::Command::new("system_profiler")
+        .args(["SPHardwareDataType", "-json"])
+        .output();
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut b = BoardInfo {
+        source: "system_profiler".into(),
+        ..Default::default()
+    };
     if let Some(crate::json::Json::Obj(root)) = crate::json::Json::parse(&text) {
         if let Some(crate::json::Json::Arr(items)) = root.get("SPHardwareDataType") {
             if let Some(h) = items.first() {
@@ -586,7 +714,11 @@ fn macos() -> BoardInfo {
                     version: g("chip_type").or_else(|| g("cpu_type")),
                     serial: g("serial_number"),
                 };
-                b.board = Ident { vendor: Some("Apple".into()), product: g("model_number"), ..Default::default() };
+                b.board = Ident {
+                    vendor: Some("Apple".into()),
+                    product: g("model_number"),
+                    ..Default::default()
+                };
                 b.bios = Bios {
                     vendor: Some("Apple".into()),
                     version: g("boot_rom_version"),
@@ -601,7 +733,12 @@ fn macos() -> BoardInfo {
 
 /// Demo data: a rack server with a BMC, one power supply without AC.
 pub fn demo() -> BoardInfo {
-    let ipmi = |name: &str, kind: Kind, value: Option<f64>, unit: &'static str, state: Option<&str>, status: Status| BoardSensor {
+    let ipmi = |name: &str,
+                kind: Kind,
+                value: Option<f64>,
+                unit: &'static str,
+                state: Option<&str>,
+                status: Status| BoardSensor {
         source: "IPMI".into(),
         name: name.into(),
         kind,
@@ -611,48 +748,184 @@ pub fn demo() -> BoardInfo {
         status,
     };
     let now = now() as u32;
-    let pci = |addr: &str, class: u32, v: u16, d: u16, name: &str, drv: Option<&str>, w: (u8, u8)| PciDev {
-        addr: addr.into(),
-        class,
-        vendor_id: v,
-        device_id: d,
-        name: name.into(),
-        driver: drv.map(str::to_string),
-        link: (w.0 > 0).then_some(Link { cur_gts: 8.0, cur_w: w.0, max_gts: 8.0, max_w: w.1, port_w: Some(w.1) }),
-        aer: Some([0, 0, 0]),
-    };
+    let pci =
+        |addr: &str, class: u32, v: u16, d: u16, name: &str, drv: Option<&str>, w: (u8, u8)| {
+            PciDev {
+                addr: addr.into(),
+                class,
+                vendor_id: v,
+                device_id: d,
+                name: name.into(),
+                driver: drv.map(str::to_string),
+                link: (w.0 > 0).then_some(Link {
+                    cur_gts: 8.0,
+                    cur_w: w.0,
+                    max_gts: 8.0,
+                    max_w: w.1,
+                    port_w: Some(w.1),
+                }),
+                aer: Some([0, 0, 0]),
+            }
+        };
     let mut sensors: Vec<BoardSensor> = (1..=6)
-        .map(|i| ipmi(&format!("Fan{i}"), Kind::Fan, Some(3000.0 + i as f64 * 120.0), "RPM", None, Status::Ok))
+        .map(|i| {
+            ipmi(
+                &format!("Fan{i}"),
+                Kind::Fan,
+                Some(3000.0 + i as f64 * 120.0),
+                "RPM",
+                None,
+                Status::Ok,
+            )
+        })
         .collect();
     sensors.extend([
         ipmi("Inlet Temp", Kind::Temp, Some(24.0), "°C", None, Status::Ok),
-        ipmi("Exhaust Temp", Kind::Temp, Some(38.0), "°C", None, Status::Ok),
-        ipmi("Temp (CPU 1)", Kind::Temp, Some(61.0), "°C", None, Status::Ok),
-        ipmi("Temp (CPU 2)", Kind::Temp, Some(57.0), "°C", None, Status::Ok),
-        ipmi("Status (PSU 1)", Kind::Power, None, "", Some("present, AC lost"), Status::Crit),
-        ipmi("Status (PSU 2)", Kind::Power, None, "", Some("present"), Status::Ok),
-        ipmi("Pwr Consumption", Kind::Power, Some(196.0), "W", None, Status::Ok),
+        ipmi(
+            "Exhaust Temp",
+            Kind::Temp,
+            Some(38.0),
+            "°C",
+            None,
+            Status::Ok,
+        ),
+        ipmi(
+            "Temp (CPU 1)",
+            Kind::Temp,
+            Some(61.0),
+            "°C",
+            None,
+            Status::Ok,
+        ),
+        ipmi(
+            "Temp (CPU 2)",
+            Kind::Temp,
+            Some(57.0),
+            "°C",
+            None,
+            Status::Ok,
+        ),
+        ipmi(
+            "Status (PSU 1)",
+            Kind::Power,
+            None,
+            "",
+            Some("present, AC lost"),
+            Status::Crit,
+        ),
+        ipmi(
+            "Status (PSU 2)",
+            Kind::Power,
+            None,
+            "",
+            Some("present"),
+            Status::Ok,
+        ),
+        ipmi(
+            "Pwr Consumption",
+            Kind::Power,
+            Some(196.0),
+            "W",
+            None,
+            Status::Ok,
+        ),
         ipmi("Voltage 2", Kind::Volt, Some(220.0), "V", None, Status::Ok),
-        ipmi("Intrusion", Kind::Other, None, "", Some("chassis closed"), Status::Ok),
+        ipmi(
+            "Intrusion",
+            Kind::Other,
+            None,
+            "",
+            Some("chassis closed"),
+            Status::Ok,
+        ),
     ]);
     BoardInfo {
-        system: Ident { vendor: Some("Dell Inc.".into()), product: Some("PowerEdge R630".into()), version: None, serial: Some("DEMO123".into()) },
-        board: Ident { vendor: Some("Dell Inc.".into()), product: Some("02C2CP".into()), version: Some("A07".into()), serial: None },
+        system: Ident {
+            vendor: Some("Dell Inc.".into()),
+            product: Some("PowerEdge R630".into()),
+            version: None,
+            serial: Some("DEMO123".into()),
+        },
+        board: Ident {
+            vendor: Some("Dell Inc.".into()),
+            product: Some("02C2CP".into()),
+            version: Some("A07".into()),
+            serial: None,
+        },
         chassis: Some("rack mount chassis".into()),
-        bios: Bios { vendor: Some("Dell Inc.".into()), version: Some("2.19.0".into()), date: Some((2023, 12, 12)), uefi: Some(true), secure_boot: Some(false) },
+        bios: Bios {
+            vendor: Some("Dell Inc.".into()),
+            version: Some("2.19.0".into()),
+            date: Some((2023, 12, 12)),
+            uefi: Some(true),
+            secure_boot: Some(false),
+        },
         bmc_firmware: Some("2.86".into()),
         pci: vec![
-            pci("0000:01:00.0", 0x020000, 0x14e4, 0x165f, "Broadcom NetXtreme BCM5720 Gigabit Ethernet", Some("tg3"), (1, 2)),
-            pci("0000:02:00.0", 0x010400, 0x1000, 0x005f, "Broadcom / LSI MegaRAID SAS-3 3008 [Fury] (PERC H330)", Some("megaraid_sas"), (8, 8)),
-            pci("0000:03:00.0", 0x030000, 0x102b, 0x0534, "Matrox G200eR2", Some("mgag200"), (0, 0)),
-            pci("0000:00:1d.0", 0x0c0320, 0x8086, 0x8d26, "Intel C610/X99 USB Enhanced Host Controller", Some("ehci-pci"), (0, 0)),
+            pci(
+                "0000:01:00.0",
+                0x020000,
+                0x14e4,
+                0x165f,
+                "Broadcom NetXtreme BCM5720 Gigabit Ethernet",
+                Some("tg3"),
+                (1, 2),
+            ),
+            pci(
+                "0000:02:00.0",
+                0x010400,
+                0x1000,
+                0x005f,
+                "Broadcom / LSI MegaRAID SAS-3 3008 [Fury] (PERC H330)",
+                Some("megaraid_sas"),
+                (8, 8),
+            ),
+            pci(
+                "0000:03:00.0",
+                0x030000,
+                0x102b,
+                0x0534,
+                "Matrox G200eR2",
+                Some("mgag200"),
+                (0, 0),
+            ),
+            pci(
+                "0000:00:1d.0",
+                0x0c0320,
+                0x8086,
+                0x8d26,
+                "Intel C610/X99 USB Enhanced Host Controller",
+                Some("ehci-pci"),
+                (0, 0),
+            ),
         ],
-        usb: vec![UsbDev { id: "1-1.5".into(), vendor_id: 0x04b8, product_id: 0x1188, name: "EPSON L3210 Series".into(), speed_mbps: 12.0 }],
+        usb: vec![UsbDev {
+            id: "1-1.5".into(),
+            vendor_id: 0x04b8,
+            product_id: 0x1188,
+            name: "EPSON L3210 Series".into(),
+            speed_mbps: 12.0,
+        }],
         sensors,
         events: vec![
-            Event { time: now.saturating_sub(40 * 86_400), sensor: "Intrusion".into(), text: "chassis opened".into(), status: Status::Warn },
-            Event { time: now.saturating_sub(40 * 86_400), sensor: "Status (PSU 1)".into(), text: "AC lost".into(), status: Status::Crit },
-            Event { time: now.saturating_sub(2 * 86_400), sensor: "Status (PSU 1)".into(), text: "AC lost".into(), status: Status::Crit },
+            Event {
+                time: now.saturating_sub(40 * 86_400),
+                sensor: "Intrusion".into(),
+                text: "chassis opened".into(),
+                status: Status::Warn,
+            },
+            Event {
+                time: now.saturating_sub(40 * 86_400),
+                sensor: "Status (PSU 1)".into(),
+                text: "AC lost".into(),
+                status: Status::Crit,
+            },
+            Event {
+                time: now.saturating_sub(2 * 86_400),
+                sensor: "Status (PSU 1)".into(),
+                text: "AC lost".into(),
+                status: Status::Crit,
+            },
         ],
         sel_entries: 28,
         ipmi_note: None,
@@ -676,10 +949,18 @@ impl BoardInfo {
         let psu_ok = self
             .sensors
             .iter()
-            .filter(|s| s.kind == Kind::Power && s.state.as_deref().is_some_and(|t| t.contains("present")) && s.status == Status::Ok)
+            .filter(|s| {
+                s.kind == Kind::Power
+                    && s.state.as_deref().is_some_and(|t| t.contains("present"))
+                    && s.status == Status::Ok
+            })
             .count();
         for s in &self.sensors {
-            if s.kind == Kind::Power && s.status == Status::Crit && psu_ok > 0 && s.state.as_deref().is_some_and(|t| t.contains("AC lost")) {
+            if s.kind == Kind::Power
+                && s.status == Status::Crit
+                && psu_ok > 0
+                && s.state.as_deref().is_some_and(|t| t.contains("AC lost"))
+            {
                 sev = sev.max(2);
                 issues.push(format!(
                     "{}: no AC input — the server runs on the other power supply (redundancy lost): check the cable / PDU",
@@ -688,7 +969,15 @@ impl BoardInfo {
                 continue;
             }
             let what = match (&s.value, &s.state) {
-                (Some(v), _) => format!("{} {v:.1}{}", s.name, if s.unit.is_empty() { String::new() } else { format!(" {}", s.unit) }),
+                (Some(v), _) => format!(
+                    "{} {v:.1}{}",
+                    s.name,
+                    if s.unit.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", s.unit)
+                    }
+                ),
                 (None, Some(st)) => format!("{}: {st}", s.name),
                 _ => s.name.clone(),
             };
@@ -707,7 +996,11 @@ impl BoardInfo {
         // Event log: critical events of the last 30 days are an issue,
         // older ones a note.
         let recent = now().saturating_sub(30 * 86_400) as u32;
-        let bad: Vec<&Event> = self.events.iter().filter(|e| e.status != Status::Ok).collect();
+        let bad: Vec<&Event> = self
+            .events
+            .iter()
+            .filter(|e| e.status != Status::Ok)
+            .collect();
         let new: Vec<&&Event> = bad.iter().filter(|e| e.time >= recent).collect();
         if let Some(e) = new.last() {
             sev = sev.max(2);
@@ -720,7 +1013,10 @@ impl BoardInfo {
             ));
         }
         if bad.len() > new.len() {
-            notes.push(format!("{} older warning/critical event(s) in the BMC log (see EVENT LOG)", bad.len() - new.len()));
+            notes.push(format!(
+                "{} older warning/critical event(s) in the BMC log (see EVENT LOG)",
+                bad.len() - new.len()
+            ));
         }
         // A VM: the chipset, firmware and sensors are emulated; only real
         // alarms (none, normally) would count.
@@ -733,7 +1029,12 @@ impl BoardInfo {
                 2 => "MONITOR",
                 _ => "CRITICAL",
             };
-            return BoardHealth { label, severity: sev, issues, notes };
+            return BoardHealth {
+                label,
+                severity: sev,
+                issues,
+                notes,
+            };
         }
         // Narrow links, grouped per (device name, width, allowed width).
         let mut narrow: Vec<((String, u8, u8), Vec<String>)> = Vec::new();
@@ -743,7 +1044,10 @@ impl BoardInfo {
                     sev = sev.max(2);
                     issues.push(format!("{} {}: PCIe errors ({fatal} fatal, {nonfatal} non-fatal) — reseat / check the card", d.addr, d.name));
                 } else if cor >= 100 {
-                    notes.push(format!("{} {}: {cor} corrected PCIe errors (signal quality: slot, riser, card)", d.addr, d.name));
+                    notes.push(format!(
+                        "{} {}: {cor} corrected PCIe errors (signal quality: slot, riser, card)",
+                        d.addr, d.name
+                    ));
                 }
             }
             if d.internal() {
@@ -789,7 +1093,10 @@ impl BoardInfo {
         // Vendor / product left unfilled, or several placeholder fields. One
         // placeholder alone is common on real server boards (Supermicro's
         // product version "0123456789").
-        let unfilled = |i: &Ident| i.vendor.as_deref().is_some_and(placeholder) || i.product.as_deref().is_some_and(placeholder);
+        let unfilled = |i: &Ident| {
+            i.vendor.as_deref().is_some_and(placeholder)
+                || i.product.as_deref().is_some_and(placeholder)
+        };
         let placeholders = [&self.system, &self.board]
             .iter()
             .flat_map(|i| [&i.vendor, &i.product, &i.version, &i.serial])
@@ -811,14 +1118,27 @@ impl BoardInfo {
                     .into(),
             );
         }
-        let known = self.system.vendor.is_some() || self.board.product.is_some() || !self.pci.is_empty();
+        let known =
+            self.system.vendor.is_some() || self.board.product.is_some() || !self.pci.is_empty();
         let label = match sev {
-            0 if !known => return BoardHealth { label: "UNKNOWN", severity: 1, issues, notes },
+            0 if !known => {
+                return BoardHealth {
+                    label: "UNKNOWN",
+                    severity: 1,
+                    issues,
+                    notes,
+                };
+            }
             0 => "OK",
             2 => "MONITOR",
             _ => "CRITICAL",
         };
-        BoardHealth { label, severity: sev, issues, notes }
+        BoardHealth {
+            label,
+            severity: sev,
+            issues,
+            notes,
+        }
     }
 
     pub fn verdict(&self) -> (&'static str, u8) {
@@ -832,7 +1152,11 @@ mod tests {
     use super::*;
 
     fn tree() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("dcheck-board-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let root = std::env::temp_dir().join(format!(
+            "dcheck-board-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let w = |p: &str, v: &str| {
             let f = root.join(p);
@@ -875,9 +1199,16 @@ mod tests {
         }
         std::fs::create_dir_all(root.join("sys/bus/pci/devices/0000:03:00.0")).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink("/sys/bus/pci/drivers/igb", root.join("sys/bus/pci/devices/0000:03:00.0/driver")).unwrap();
+        std::os::unix::fs::symlink(
+            "/sys/bus/pci/drivers/igb",
+            root.join("sys/bus/pci/devices/0000:03:00.0/driver"),
+        )
+        .unwrap();
         dev("0000:00:01.0", "0x060400", "0x8086", "0x2f02");
-        w("usr/share/hwdata/pci.ids", "1002  Advanced Micro Devices, Inc. [AMD/ATI]\n\t6611  Oland [Radeon HD 8570]\n8086  Intel Corporation\n\t1521  I350 Gigabit Network Connection\n\t\t1028 1f60  subsystem\nC 00  Unclassified\n");
+        w(
+            "usr/share/hwdata/pci.ids",
+            "1002  Advanced Micro Devices, Inc. [AMD/ATI]\n\t6611  Oland [Radeon HD 8570]\n8086  Intel Corporation\n\t1521  I350 Gigabit Network Connection\n\t\t1028 1f60  subsystem\nC 00  Unclassified\n",
+        );
         // hwmon: a board chip with a failed fan and a CPU chip (ignored).
         w("sys/class/hwmon/hwmon0/name", "coretemp");
         w("sys/class/hwmon/hwmon0/temp1_input", "55000");
@@ -902,18 +1233,30 @@ mod tests {
     fn reads_a_board_tree() {
         let root = tree();
         let b = read_from(&root);
-        assert_eq!((b.system.vendor.as_deref(), b.board.product.as_deref()), (Some("INTEL"), Some("X99")));
+        assert_eq!(
+            (b.system.vendor.as_deref(), b.board.product.as_deref()),
+            (Some("INTEL"), Some("X99"))
+        );
         assert_eq!(b.chassis.as_deref(), Some("desktop"));
         assert_eq!(b.bios.date, Some((2016, 3, 5)));
         assert_eq!(b.bios.uefi, Some(false));
         let gpu = b.pci.iter().find(|d| d.addr == "0000:02:00.0").unwrap();
-        assert_eq!(gpu.name, "Advanced Micro Devices, Inc. [AMD/ATI] Oland [Radeon HD 8570]");
+        assert_eq!(
+            gpu.name,
+            "Advanced Micro Devices, Inc. [AMD/ATI] Oland [Radeon HD 8570]"
+        );
         assert!(gpu.driver.is_none());
         let nic = b.pci.iter().find(|d| d.addr == "0000:03:00.0").unwrap();
         assert_eq!(nic.driver.as_deref(), Some("igb"));
         assert_eq!(nic.aer, Some([3, 0, 1]));
         assert_eq!(nic.link.as_ref().map(|l| (l.cur_w, l.max_w)), Some((1, 4)));
-        assert!(b.pci.iter().find(|d| d.addr == "0000:00:01.0").unwrap().internal());
+        assert!(
+            b.pci
+                .iter()
+                .find(|d| d.addr == "0000:00:01.0")
+                .unwrap()
+                .internal()
+        );
         // coretemp is the CPU module's; the board chip is read.
         assert!(b.sensors.iter().all(|s| s.source == "nct6775"));
         let fan = b.sensors.iter().find(|s| s.name == "CPU_FAN").unwrap();
@@ -926,7 +1269,14 @@ mod tests {
         let h = b.health();
         assert_eq!(h.label, "MONITOR");
         let all = format!("{:?} {:?}", h.issues, h.notes);
-        for e in ["CPU_FAN", "fatal", "x1 while card and slot allow x4", "no driver", "BIOS is", "white-label"] {
+        for e in [
+            "CPU_FAN",
+            "fatal",
+            "x1 while card and slot allow x4",
+            "no driver",
+            "BIOS is",
+            "white-label",
+        ] {
             assert!(all.contains(e), "missing {e:?} in {all}");
         }
         std::fs::remove_dir_all(&root).unwrap();
@@ -934,7 +1284,14 @@ mod tests {
 
     #[test]
     fn ipmi_events_and_sensors_drive_the_verdict() {
-        let mut b = BoardInfo { system: Ident { vendor: Some("Dell Inc.".into()), product: Some("PowerEdge R630".into()), ..Default::default() }, ..Default::default() };
+        let mut b = BoardInfo {
+            system: Ident {
+                vendor: Some("Dell Inc.".into()),
+                product: Some("PowerEdge R630".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert_eq!(b.health().label, "OK");
         let now = now() as u32;
         add_ipmi(
@@ -942,12 +1299,36 @@ mod tests {
             crate::ipmi::Ipmi {
                 bmc_firmware: Some("2.83".into()),
                 sensors: vec![
-                    crate::ipmi::Sensor { name: "Fan1 RPM".into(), kind: 0x04, entity: (0x1D, 1), value: Some((3840.0, "RPM")), state: None, status: Status::Ok },
-                    crate::ipmi::Sensor { name: "PS2 Status".into(), kind: 0x08, entity: (0x0A, 2), value: None, state: Some("present, AC lost".into()), status: Status::Crit },
+                    crate::ipmi::Sensor {
+                        name: "Fan1 RPM".into(),
+                        kind: 0x04,
+                        entity: (0x1D, 1),
+                        value: Some((3840.0, "RPM")),
+                        state: None,
+                        status: Status::Ok,
+                    },
+                    crate::ipmi::Sensor {
+                        name: "PS2 Status".into(),
+                        kind: 0x08,
+                        entity: (0x0A, 2),
+                        value: None,
+                        state: Some("present, AC lost".into()),
+                        status: Status::Crit,
+                    },
                 ],
                 events: vec![
-                    Event { time: 1_600_000_000, sensor: "Intrusion".into(), text: "chassis opened".into(), status: Status::Warn },
-                    Event { time: now - 86_400, sensor: "PS2 Status".into(), text: "AC lost".into(), status: Status::Crit },
+                    Event {
+                        time: 1_600_000_000,
+                        sensor: "Intrusion".into(),
+                        text: "chassis opened".into(),
+                        status: Status::Warn,
+                    },
+                    Event {
+                        time: now - 86_400,
+                        sensor: "PS2 Status".into(),
+                        text: "AC lost".into(),
+                        status: Status::Crit,
+                    },
                 ],
                 sel_entries: 2,
                 error: None,
@@ -956,7 +1337,11 @@ mod tests {
         let h = b.health();
         // Only one supply: losing AC is critical.
         assert_eq!(h.label, "CRITICAL");
-        assert!(h.issues.iter().any(|i| i.contains("PS2 Status: present, AC lost")));
+        assert!(
+            h.issues
+                .iter()
+                .any(|i| i.contains("PS2 Status: present, AC lost"))
+        );
         // With a working second supply it is lost redundancy.
         b.sensors.push(BoardSensor {
             source: "IPMI".into(),
@@ -969,10 +1354,25 @@ mod tests {
         });
         let h = b.health();
         assert_eq!(h.label, "MONITOR");
-        assert!(h.issues.iter().any(|i| i.contains("redundancy lost")), "{:?}", h.issues);
-        assert!(h.issues.iter().any(|i| i.contains("1 warning/critical event(s)")));
+        assert!(
+            h.issues.iter().any(|i| i.contains("redundancy lost")),
+            "{:?}",
+            h.issues
+        );
+        assert!(
+            h.issues
+                .iter()
+                .any(|i| i.contains("1 warning/critical event(s)"))
+        );
         assert!(h.notes.iter().any(|n| n.contains("1 older")));
-        assert_eq!(b.sensors.iter().find(|s| s.name == "PS2 Status").unwrap().kind, Kind::Power);
+        assert_eq!(
+            b.sensors
+                .iter()
+                .find(|s| s.name == "PS2 Status")
+                .unwrap()
+                .kind,
+            Kind::Power
+        );
     }
 
     #[test]
@@ -994,11 +1394,26 @@ mod tests {
     #[test]
     fn one_placeholder_is_not_a_generic_board() {
         // melbicom-ded: Supermicro with product version "0123456789".
-        let id = |v: &str, p: &str, ver: &str| Ident { vendor: Some(v.into()), product: Some(p.into()), version: Some(ver.into()), serial: None };
-        let b = BoardInfo { system: id("Supermicro", "AS -3015MR-H8TNR", "0123456789"), board: id("Supermicro", "H13SRD-F", "1.00"), source: "sysfs".into(), ..Default::default() };
+        let id = |v: &str, p: &str, ver: &str| Ident {
+            vendor: Some(v.into()),
+            product: Some(p.into()),
+            version: Some(ver.into()),
+            serial: None,
+        };
+        let b = BoardInfo {
+            system: id("Supermicro", "AS -3015MR-H8TNR", "0123456789"),
+            board: id("Supermicro", "H13SRD-F", "1.00"),
+            source: "sysfs".into(),
+            ..Default::default()
+        };
         assert!(!format!("{:?}", b.health().notes).contains("white-label"));
         // lab-243: "Default string" in system and board version.
-        let b = BoardInfo { system: id("INTEL", "X99", "Default string"), board: id("INTEL", "X99", "Default string"), source: "sysfs".into(), ..Default::default() };
+        let b = BoardInfo {
+            system: id("INTEL", "X99", "Default string"),
+            board: id("INTEL", "X99", "Default string"),
+            source: "sysfs".into(),
+            ..Default::default()
+        };
         assert!(format!("{:?}", b.health().notes).contains("white-label"));
     }
 
@@ -1008,9 +1423,19 @@ mod tests {
         assert_eq!(parse_bios_date("13/01/2020"), None);
         assert_eq!(fmt_time(0), "1970-01-01 00:00");
         assert_eq!(fmt_time(1_780_992_000), "2026-06-09 08:00");
-        assert!(placeholder("Default string") && placeholder("To be filled by O.E.M.") && !placeholder("PowerEdge R630"));
-        let ids = parse_ids("8086  Intel Corporation\n\t1521  I350\n10ec  Realtek\n\t8168  RTL8111\n", &[(0x10ec, 0x8168)]);
-        assert_eq!(ids.get(&(0x10ec, Some(0x8168))).map(String::as_str), Some("RTL8111"));
+        assert!(
+            placeholder("Default string")
+                && placeholder("To be filled by O.E.M.")
+                && !placeholder("PowerEdge R630")
+        );
+        let ids = parse_ids(
+            "8086  Intel Corporation\n\t1521  I350\n10ec  Realtek\n\t8168  RTL8111\n",
+            &[(0x10ec, 0x8168)],
+        );
+        assert_eq!(
+            ids.get(&(0x10ec, Some(0x8168))).map(String::as_str),
+            Some("RTL8111")
+        );
         assert!(!ids.contains_key(&(0x8086, None)));
     }
 }

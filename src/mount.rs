@@ -77,14 +77,22 @@ pub fn usage(mount: &str) -> Option<Usage> {
     if rc != 0 {
         return None;
     }
-    Some(from_blocks(st.f_frsize, st.f_blocks, st.f_bfree, st.f_bavail))
+    Some(from_blocks(
+        st.f_frsize,
+        st.f_blocks,
+        st.f_bfree,
+        st.f_bavail,
+    ))
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn usage(mount: &str) -> Option<Usage> {
     // macOS and the BSDs have no portably-declared statvfs struct here; `df -P
     // -k` reports the same counters in 1024-byte blocks.
-    let out = std::process::Command::new("df").args(["-P", "-k", mount]).output().ok()?;
+    let out = std::process::Command::new("df")
+        .args(["-P", "-k", mount])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -102,7 +110,12 @@ pub fn parse_df(text: &str) -> Option<Usage> {
     let blocks: u64 = f[1].parse().ok()?;
     let used: u64 = f[2].parse().ok()?;
     let avail: u64 = f[3].parse().ok()?;
-    Some(from_blocks(1024, blocks, blocks.saturating_sub(used), avail))
+    Some(from_blocks(
+        1024,
+        blocks,
+        blocks.saturating_sub(used),
+        avail,
+    ))
 }
 
 #[cfg(test)]

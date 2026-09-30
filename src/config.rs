@@ -171,7 +171,10 @@ mod tests {
 
     #[test]
     fn parses_theme() {
-        assert_eq!(parse(r#"{"theme":"light"}"#).theme.as_deref(), Some("light"));
+        assert_eq!(
+            parse(r#"{"theme":"light"}"#).theme.as_deref(),
+            Some("light")
+        );
     }
 
     #[test]

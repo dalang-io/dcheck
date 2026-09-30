@@ -2,32 +2,34 @@
 //! reports. Entered for interactive use; `main` falls back to the plain text
 //! menu when stdout is not a terminal.
 //!
-//! - `theme`: neon truecolor / ANSI / mono palettes and Unicode/ASCII glyphs.
-//! - `widgets`: bracket panels, line gauges, badges, keycaps.
+//! - `brand`: dcheck's [`App`] identity plus the logotype and the panel title
+//!   style — the parts the shared crate cannot express.
 //! - `views`: splash, command deck, storage, report, RAM, CPU, recovery,
 //!   capacity test, help overlay.
+//!
+//! Colours, glyphs and the widget set are the shared `wayang_tui` ones
+//! (`Theme::resolve`, `wayang_tui::widgets`), not a private copy.
 //!
 //! All hardware reads run on background threads; the UI only redraws on input,
 //! while something is loading, or during the (≤0.5 s, skippable) splash.
 
+mod brand;
 pub mod snapshot;
-mod theme;
 mod views;
-mod widgets;
 
 use std::io::{self, Stdout, Write};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
+use ratatui::Terminal;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::widgets::{ListState, TableState};
-use ratatui::Terminal;
 
 use crate::cpu::CpuInfo;
 use crate::health::Health;
@@ -36,7 +38,8 @@ use crate::ram::RamInfo;
 use crate::report;
 use crate::smartctl::SmartData;
 
-pub use theme::{ColorMode, Palette, Ui};
+pub use brand::DCHECK;
+pub use wayang_tui::theme::{ColorMode, Flags, Palette, Theme, Ui};
 
 const SPLASH: Duration = Duration::from_millis(500);
 const MENU_ITEMS: usize = 5;
@@ -132,7 +135,12 @@ impl DevHealth {
     /// UNKNOWN.
     fn for_device(d: &Device, m: Option<&(SmartData, Health)>) -> Self {
         match m {
-            None if crate::virt::is_virtual_disk(d) => DevHealth { label: "VIRTUAL".into(), sev: 0, life: None, temp: None },
+            None if crate::virt::is_virtual_disk(d) => DevHealth {
+                label: "VIRTUAL".into(),
+                sev: 0,
+                life: None,
+                temp: None,
+            },
             _ => DevHealth::from_metrics(m),
         }
     }
@@ -164,8 +172,9 @@ struct App {
     devices: Vec<Device>,
     demo: bool,
     mouse: bool,
-    pal: Palette,
-    ui: Ui,
+    /// dcheck's [`DCHECK`] identity plus the resolved palette and glyph set,
+    /// from the shared `wayang_tui` crate.
+    theme: Theme,
     host: String,
     temp_warn: i64,
 
@@ -225,7 +234,7 @@ struct App {
 }
 
 impl App {
-    fn new(devices: Vec<Device>, pal: Palette, ui: Ui, demo: bool, mouse: bool, splash: bool) -> Self {
+    fn new(devices: Vec<Device>, theme: Theme, demo: bool, mouse: bool, splash: bool) -> Self {
         let mut menu = ListState::default();
         menu.select(Some(0));
         let mut table = TableState::default();
@@ -237,8 +246,7 @@ impl App {
             devices,
             demo,
             mouse,
-            pal,
-            ui,
+            theme,
             host: hostname(),
             temp_warn: crate::config::load().temp_warn_c,
             screen: if splash { Screen::Splash } else { Screen::Menu },
@@ -296,7 +304,11 @@ impl App {
         let demo = self.demo;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(if demo { crate::board::demo() } else { crate::board::read() });
+            let _ = tx.send(if demo {
+                crate::board::demo()
+            } else {
+                crate::board::read()
+            });
         });
         self.board_rx = Some(rx);
     }
@@ -406,7 +418,9 @@ impl App {
             let g = crate::recover::gather(&dev.path);
             let map = match &g {
                 Ok(g) if crate::native::is_root() => Some(crate::recover::sample_map(g, 512)),
-                Ok(_) => Some(Err("run dcheck as root to map where the disk still holds data".into())),
+                Ok(_) => Some(Err(
+                    "run dcheck as root to map where the disk still holds data".into(),
+                )),
                 Err(_) => None,
             };
             let _ = tx.send(RecoverMsg::Gathered(g));
@@ -453,7 +467,10 @@ impl App {
         if pick.is_empty() {
             pick.extend(self.undel_table.selected());
         }
-        let files: Vec<crate::undelete::Deleted> = pick.iter().filter_map(|i| scan.files.get(*i).cloned()).collect();
+        let files: Vec<crate::undelete::Deleted> = pick
+            .iter()
+            .filter_map(|i| scan.files.get(*i).cloned())
+            .collect();
         if files.is_empty() {
             return;
         }
@@ -500,7 +517,10 @@ impl App {
             Err("no disk to test on a dead port".into())
         } else if self.demo {
             // The demo "Flash Disk" plays a counterfeit stick.
-            Ok(crate::verify::demo_plan(dev, dev.bus == crate::model::Bus::Usb))
+            Ok(crate::verify::demo_plan(
+                dev,
+                dev.bus == crate::model::Bus::Usb,
+            ))
         } else {
             crate::verify::plan(dev, None)
         };
@@ -522,7 +542,11 @@ impl App {
     }
 
     fn start_verify(&mut self) {
-        let VerifyState::Plan { plan: Ok(plan), full } = &self.verify else {
+        let VerifyState::Plan {
+            plan: Ok(plan),
+            full,
+        } = &self.verify
+        else {
             return;
         };
         let (plan, total) = (plan.clone(), Self::verify_total(plan, *full));
@@ -612,7 +636,9 @@ impl App {
                 self.undel_log = r
                     .into_iter()
                     .map(|x| match x {
-                        Ok((p, n)) => format!("recovered  {p}  ({})", crate::report::human_size_bin(n)),
+                        Ok((p, n)) => {
+                            format!("recovered  {p}  ({})", crate::report::human_size_bin(n))
+                        }
                         Err(e) => format!("failed     {e}"),
                     })
                     .collect();
@@ -649,7 +675,14 @@ impl App {
 
     fn drain_verify(&mut self) {
         let mut finished = None;
-        if let VerifyState::Running { rx, phase, done, of, .. } = &mut self.verify {
+        if let VerifyState::Running {
+            rx,
+            phase,
+            done,
+            of,
+            ..
+        } = &mut self.verify
+        {
             loop {
                 match rx.try_recv() {
                     Ok(VerifyMsg::Progress(ph, d, t)) => {
@@ -670,7 +703,9 @@ impl App {
             }
         }
         let Some(r) = finished else { return };
-        let VerifyState::Running { plan, .. } = &self.verify else { return };
+        let VerifyState::Running { plan, .. } = &self.verify else {
+            return;
+        };
         let target = if plan.simulated.is_some() {
             format!("{} (simulated demo drive)", plan.device)
         } else {
@@ -678,7 +713,8 @@ impl App {
         };
         let (lines, code) = match r {
             Ok((o, cleanup)) => {
-                let (mut lines, code) = crate::verify::outcome_lines(&target, &o, plan.simulated.is_some());
+                let (mut lines, code) =
+                    crate::verify::outcome_lines(&target, &o, plan.simulated.is_some());
                 if let Some(e) = cleanup {
                     lines.push(format!("  Warning      : {e}"));
                 }
@@ -703,7 +739,10 @@ impl App {
     }
 
     fn ram_sev(&self) -> (&'static str, u8) {
-        self.ram.as_ref().map(|r| r.verdict()).unwrap_or(("UNKNOWN", 1))
+        self.ram
+            .as_ref()
+            .map(|r| r.verdict())
+            .unwrap_or(("UNKNOWN", 1))
     }
 
     fn cpu_sev(&self) -> (&'static str, u8) {
@@ -714,7 +753,10 @@ impl App {
     }
 
     fn board_sev(&self) -> (&'static str, u8) {
-        self.board.as_ref().map(|b| b.verdict()).unwrap_or(("UNKNOWN", 1))
+        self.board
+            .as_ref()
+            .map(|b| b.verdict())
+            .unwrap_or(("UNKNOWN", 1))
     }
 
     fn worst_device(&self) -> u8 {
@@ -754,7 +796,9 @@ fn open_source(path: &str) -> Result<Box<dyn crate::undelete::Source + Send>, St
     }
     #[cfg(not(unix))]
     {
-        Err(format!("cannot open {path}: not supported on this platform"))
+        Err(format!(
+            "cannot open {path}: not supported on this platform"
+        ))
     }
 }
 
@@ -812,10 +856,25 @@ fn hostname() -> String {
 
 /// Run the TUI. Must be called on a real terminal.
 pub fn run(devices: Vec<Device>, opts: Options) -> io::Result<()> {
-    let pal = Palette::new(ColorMode::detect(), opts.light, opts.transparent);
-    let ui = Ui { plain: opts.plain };
+    // The crate's pure constructor rather than `Theme::resolve`, so the
+    // resolution inputs are exactly the three dcheck has always read:
+    // `NO_COLOR` > `DCHECK_COLOR` > `COLORTERM`. (`resolve` would also honour
+    // the crate-wide `WAYANG_TUI_COLOR`, which is not one of dcheck's vars.)
+    // `--mono` has no dcheck flag, so `Flags::mono` stays `false`.
+    let theme = Theme::from_env(
+        DCHECK,
+        Flags {
+            light: opts.light,
+            plain: opts.plain,
+            transparent: opts.transparent,
+            ..Flags::default()
+        },
+        std::env::var_os("NO_COLOR").is_some(),
+        std::env::var("DCHECK_COLOR").ok().as_deref(),
+        std::env::var("COLORTERM").ok().as_deref(),
+    );
     let splash = opts.splash && !opts.plain;
-    let mut app = App::new(devices, pal, ui, opts.demo, opts.mouse, splash);
+    let mut app = App::new(devices, theme, opts.demo, opts.mouse, splash);
     app.spawn_all();
 
     enable_raw_mode()?;
@@ -921,7 +980,9 @@ fn handle_undelete_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('a') => {
             if let Some(s) = &app.undel {
-                let intact: Vec<usize> = (0..n).filter(|i| s.files[*i].state == crate::undelete::State::Intact).collect();
+                let intact: Vec<usize> = (0..n)
+                    .filter(|i| s.files[*i].state == crate::undelete::State::Intact)
+                    .collect();
                 if intact.iter().all(|i| app.undel_marked.contains(i)) {
                     app.undel_marked.clear();
                 } else {
@@ -945,15 +1006,20 @@ fn handle_verify_key(app: &mut App, code: KeyCode) {
                 app.verify = VerifyState::Idle;
                 app.screen = app.tool_back;
             }
-            KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') | KeyCode::Char('k') => {
-                match plan {
-                    Ok(p) if p.system.is_some() && !*full => {
-                        app.status = Some("full test is not offered on a system disk (use the CLI with --full)".into());
-                    }
-                    Ok(_) => *full = !*full,
-                    Err(_) => {}
+            KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Tab
+            | KeyCode::Char('j')
+            | KeyCode::Char('k') => match plan {
+                Ok(p) if p.system.is_some() && !*full => {
+                    app.status = Some(
+                        "full test is not offered on a system disk (use the CLI with --full)"
+                            .into(),
+                    );
                 }
-            }
+                Ok(_) => *full = !*full,
+                Err(_) => {}
+            },
             KeyCode::Char('y') | KeyCode::Char('Y') if plan.is_ok() => app.start_verify(),
             KeyCode::Enter if plan.is_ok() => {
                 app.status = Some("press y to start the test (it writes test files)".into());
@@ -1075,60 +1141,62 @@ fn handle_key(app: &mut App, code: KeyCode) -> bool {
         },
         Screen::Verify => handle_verify_key(app, code),
         Screen::Undelete => handle_undelete_key(app, code),
-        Screen::Report | Screen::Ram | Screen::Cpu | Screen::Board | Screen::Recover => match code {
-            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('b') => {
-                app.screen = match app.screen {
-                    Screen::Report => Screen::Storage,
-                    Screen::Recover => app.tool_back,
-                    _ => Screen::Menu,
-                };
-            }
-            KeyCode::Char('d') if app.screen == Screen::Recover => app.open_undelete(),
-            KeyCode::Char('u') if app.screen == Screen::Report => {
-                if let Some(i) = app.tool_target() {
-                    app.open_recover(i);
+        Screen::Report | Screen::Ram | Screen::Cpu | Screen::Board | Screen::Recover => {
+            match code {
+                KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('b') => {
+                    app.screen = match app.screen {
+                        Screen::Report => Screen::Storage,
+                        Screen::Recover => app.tool_back,
+                        _ => Screen::Menu,
+                    };
                 }
-            }
-            KeyCode::Char('v') if app.screen == Screen::Report => {
-                if let Some(i) = app.tool_target() {
-                    app.open_verify(i);
-                }
-            }
-            KeyCode::Char('c') => copy_current(app),
-            KeyCode::Char('r') => match app.screen {
-                Screen::Report => {
-                    if let Some(i) = app.report_dev {
-                        if let Some(d) = app.devices.get(i) {
-                            crate::cache::invalidate(d);
-                        }
-                        app.start_report(i);
-                    }
-                }
-                Screen::Ram => {
-                    app.spawn_ram();
-                }
-                Screen::Board => {
-                    app.spawn_board();
-                }
-                Screen::Recover => {
-                    if let Some(i) = app.tool_dev {
-                        let back = app.tool_back;
+                KeyCode::Char('d') if app.screen == Screen::Recover => app.open_undelete(),
+                KeyCode::Char('u') if app.screen == Screen::Report => {
+                    if let Some(i) = app.tool_target() {
                         app.open_recover(i);
-                        app.tool_back = back;
                     }
                 }
-                _ => {
-                    app.spawn_cpu();
+                KeyCode::Char('v') if app.screen == Screen::Report => {
+                    if let Some(i) = app.tool_target() {
+                        app.open_verify(i);
+                    }
                 }
-            },
-            KeyCode::Down | KeyCode::Char('j') => app.scroll_by(1),
-            KeyCode::Up | KeyCode::Char('k') => app.scroll_by(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') => app.scroll_by(10),
-            KeyCode::PageUp => app.scroll_by(-10),
-            KeyCode::Home | KeyCode::Char('g') => app.scroll = 0,
-            KeyCode::End | KeyCode::Char('G') => app.scroll = app.max_scroll(),
-            _ => {}
-        },
+                KeyCode::Char('c') => copy_current(app),
+                KeyCode::Char('r') => match app.screen {
+                    Screen::Report => {
+                        if let Some(i) = app.report_dev {
+                            if let Some(d) = app.devices.get(i) {
+                                crate::cache::invalidate(d);
+                            }
+                            app.start_report(i);
+                        }
+                    }
+                    Screen::Ram => {
+                        app.spawn_ram();
+                    }
+                    Screen::Board => {
+                        app.spawn_board();
+                    }
+                    Screen::Recover => {
+                        if let Some(i) = app.tool_dev {
+                            let back = app.tool_back;
+                            app.open_recover(i);
+                            app.tool_back = back;
+                        }
+                    }
+                    _ => {
+                        app.spawn_cpu();
+                    }
+                },
+                KeyCode::Down | KeyCode::Char('j') => app.scroll_by(1),
+                KeyCode::Up | KeyCode::Char('k') => app.scroll_by(-1),
+                KeyCode::PageDown | KeyCode::Char(' ') => app.scroll_by(10),
+                KeyCode::PageUp => app.scroll_by(-10),
+                KeyCode::Home | KeyCode::Char('g') => app.scroll = 0,
+                KeyCode::End | KeyCode::Char('G') => app.scroll = app.max_scroll(),
+                _ => {}
+            }
+        }
     }
     false
 }
@@ -1140,11 +1208,17 @@ fn handle_mouse(app: &mut App, kind: MouseEventKind) {
         _ => return,
     };
     match app.screen {
-        Screen::Report | Screen::Ram | Screen::Cpu | Screen::Board | Screen::Recover | Screen::Verify => app.scroll_by(delta * 3),
+        Screen::Report
+        | Screen::Ram
+        | Screen::Cpu
+        | Screen::Board
+        | Screen::Recover
+        | Screen::Verify => app.scroll_by(delta * 3),
         Screen::Undelete => {
             let n = app.undel.as_ref().map_or(0, |s| s.files.len()) as i32;
             let i = app.undel_table.selected().unwrap_or(0) as i32 + delta;
-            app.undel_table.select(Some(i.clamp(0, (n - 1).max(0)) as usize));
+            app.undel_table
+                .select(Some(i.clamp(0, (n - 1).max(0)) as usize));
         }
         Screen::Storage => {
             let i = app.table.selected().unwrap_or(0) as i32 + delta;
@@ -1153,7 +1227,8 @@ fn handle_mouse(app: &mut App, kind: MouseEventKind) {
         }
         Screen::Menu => {
             let i = app.menu.selected().unwrap_or(0) as i32 + delta;
-            app.menu.select(Some(i.clamp(0, MENU_ITEMS as i32 - 1) as usize));
+            app.menu
+                .select(Some(i.clamp(0, MENU_ITEMS as i32 - 1) as usize));
         }
         Screen::Splash => {}
     }
@@ -1168,7 +1243,11 @@ fn copy_current(app: &mut App) {
         Screen::Board => app.board_lines.join("\n"),
         Screen::Recover => app.recover_lines.join("\n"),
         Screen::Verify => app.verify_lines.join("\n"),
-        Screen::Undelete => app.undel.as_ref().map(|s| crate::undelete::scan_lines(s).join("\n")).unwrap_or_default(),
+        Screen::Undelete => app
+            .undel
+            .as_ref()
+            .map(|s| crate::undelete::scan_lines(s).join("\n"))
+            .unwrap_or_default(),
         _ => String::new(),
     };
     if text.trim().is_empty() {
@@ -1193,8 +1272,16 @@ fn base64(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(T[((n >> 18) & 63) as usize] as char);
         out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }

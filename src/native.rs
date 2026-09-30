@@ -14,7 +14,7 @@
 compile_error!("dcheck's raw ioctl/statvfs structs assume a 64-bit Linux target");
 
 use crate::model::Device;
-use crate::smartctl::{attr_name, SmartAttribute, SmartData};
+use crate::smartctl::{SmartAttribute, SmartData, attr_name};
 
 /// Identity fields read natively (used to enrich the report when smartctl is
 /// absent).
@@ -167,7 +167,10 @@ pub fn ata_wwn(identify: &[u8]) -> Option<String> {
         return None;
     }
     let word = |w: usize| u16::from_le_bytes([identify[w * 2], identify[w * 2 + 1]]) as u64;
-    Some(format!("{:016x}", word(108) << 48 | word(109) << 32 | word(110) << 16 | word(111)))
+    Some(format!(
+        "{:016x}",
+        word(108) << 48 | word(109) << 32 | word(110) << 16 | word(111)
+    ))
 }
 
 /// NAA designator of the logical unit from SCSI VPD page 0x83 (hex).
@@ -178,7 +181,11 @@ pub fn parse_vpd83_naa(page: &[u8]) -> Option<String> {
     let end = (4 + u16::from_be_bytes([page[2], page[3]]) as usize).min(page.len());
     let mut i = 4;
     while i + 4 <= end {
-        let (assoc, kind, len) = ((page[i + 1] >> 4) & 0x3, page[i + 1] & 0xf, page[i + 3] as usize);
+        let (assoc, kind, len) = (
+            (page[i + 1] >> 4) & 0x3,
+            page[i + 1] & 0xf,
+            page[i + 3] as usize,
+        );
         let data = page.get(i + 4..i + 4 + len)?;
         if kind == 3 && assoc == 0 && !data.is_empty() {
             return Some(data.iter().map(|b| format!("{b:02x}")).collect());
@@ -190,11 +197,7 @@ pub fn parse_vpd83_naa(page: &[u8]) -> Option<String> {
 
 fn nonempty(s: String) -> Option<String> {
     let t = s.trim().to_string();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t)
-    }
+    if t.is_empty() { None } else { Some(t) }
 }
 
 /// CDW10 of Get Log Page: log id and the number of dwords to return, minus
@@ -237,7 +240,9 @@ pub fn parse_ata_smart(data: &[u8]) -> SmartData {
             231 | 233 => s.life_percent = Some(value as u64),
             // Samsung Wear_Leveling_Count / Micron Percent_Lifetime_Remain:
             // normalized "100 = new", used when 231/233 are absent.
-            177 | 202 if s.life_percent.is_none() && value <= 100 => s.life_percent = Some(value as u64),
+            177 | 202 if s.life_percent.is_none() && value <= 100 => {
+                s.life_percent = Some(value as u64)
+            }
             241 => s.lba_written = Some(raw),
             242 => s.lba_read = Some(raw),
             _ => {}
@@ -304,12 +309,10 @@ pub fn parse_nvme_health(data: &[u8]) -> SmartData {
     s.available_spare_threshold = Some(data[4] as u64);
     s.media_errors = Some(to_u64_sat(le_u128(&data[160..])));
     s.nvme_errors = Some(to_u64_sat(le_u128(&data[176..])));
-    s.warning_temp_time = Some(u32::from_le_bytes([
-        data[192], data[193], data[194], data[195],
-    ]) as u64);
-    s.critical_temp_time = Some(u32::from_le_bytes([
-        data[196], data[197], data[198], data[199],
-    ]) as u64);
+    s.warning_temp_time =
+        Some(u32::from_le_bytes([data[192], data[193], data[194], data[195]]) as u64);
+    s.critical_temp_time =
+        Some(u32::from_le_bytes([data[196], data[197], data[198], data[199]]) as u64);
     s.passed = Some(critical_warning == 0);
 
     s
@@ -344,7 +347,18 @@ pub const LOG_PC_CUMULATIVE: u8 = 1;
 /// byte 1 only holds SP/PPC (setting it makes drives reject the command).
 pub fn log_sense_cdb(page: u8, pc: u8, alloc: u16) -> [u8; 10] {
     let [hi, lo] = alloc.to_be_bytes();
-    [0x4D, 0x00, (pc & 0x03) << 6 | (page & 0x3F), 0, 0, 0, 0, hi, lo, 0]
+    [
+        0x4D,
+        0x00,
+        (pc & 0x03) << 6 | (page & 0x3F),
+        0,
+        0,
+        0,
+        0,
+        hi,
+        lo,
+        0,
+    ]
 }
 
 /// READ DEFECT DATA(10) for the grown defect list (REQ_GLIST, format 4).
@@ -364,7 +378,10 @@ pub fn parse_supported_pages(buf: &[u8]) -> Vec<u8> {
         return Vec::new();
     }
     let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-    buf[4..buf.len().min(4 + len)].iter().map(|p| p & 0x3F).collect()
+    buf[4..buf.len().min(4 + len)]
+        .iter()
+        .map(|p| p & 0x3F)
+        .collect()
 }
 
 /// Fold one SCSI log page into `s`; returns true when it contributed data.
@@ -408,7 +425,10 @@ pub fn apply_scsi_log(s: &mut SmartData, page: u8, buf: &[u8]) -> bool {
             }
             (0x0E, 0x0001) if data.len() >= 6 && data[..6].is_ascii() => {
                 let text = String::from_utf8_lossy(&data[..6]);
-                if let (Ok(y), Ok(w)) = (text[..4].trim().parse::<u16>(), text[4..].trim().parse::<u8>()) {
+                if let (Ok(y), Ok(w)) = (
+                    text[..4].trim().parse::<u16>(),
+                    text[4..].trim().parse::<u8>(),
+                ) {
                     if y > 1990 {
                         s.manufactured = Some((y, w));
                     }
@@ -422,7 +442,10 @@ pub fn apply_scsi_log(s: &mut SmartData, page: u8, buf: &[u8]) -> bool {
             (0x0E, 0x0005) if data.len() >= 4 => s.rated_load_unload = Some(be_uint(&data[..4])),
             (0x0E, 0x0006) if data.len() >= 4 => s.load_unload = Some(be_uint(&data[..4])),
             (0x10, 0x0001) if data.len() >= 4 && data.iter().any(|b| *b != 0) => {
-                s.last_self_test = Some(self_test_summary(data[0], u16::from_be_bytes([data[2], data[3]])));
+                s.last_self_test = Some(self_test_summary(
+                    data[0],
+                    u16::from_be_bytes([data[2], data[3]]),
+                ));
             }
             (0x18, _) => {
                 if let Some((rate, errs)) = parse_sas_port(&data) {
@@ -615,8 +638,9 @@ mod linux {
     use crate::smartctl::apply_device_stat;
 
     use super::{
-        apply_scsi_log, parse_device_stats, log_sense_cdb, read_defect_cdb, nonempty, parse_ata_smart, parse_nvme_health,
-        parse_supported_pages, IdInfo, SelfTest, SmartData, LOG_PC_CUMULATIVE,
+        IdInfo, LOG_PC_CUMULATIVE, SelfTest, SmartData, apply_scsi_log, log_sense_cdb, nonempty,
+        parse_ata_smart, parse_device_stats, parse_nvme_health, parse_supported_pages,
+        read_defect_cdb,
     };
     use crate::model::{Bus, Device, MediaKind};
 
@@ -713,7 +737,11 @@ mod linux {
         let mut cdb = cdb.to_vec();
         let mut hdr = SgIoHdr {
             interface_id: 'S' as CInt,
-            dxfer_direction: if data.is_empty() { SG_DXFER_NONE } else { SG_DXFER_FROM_DEV },
+            dxfer_direction: if data.is_empty() {
+                SG_DXFER_NONE
+            } else {
+                SG_DXFER_FROM_DEV
+            },
             cmd_len: cdb.len() as u8,
             mx_sb_len: sense.len() as u8,
             iovec_count: 0,
@@ -803,7 +831,9 @@ mod linux {
         smart.passed = status();
         // Device Statistics (log 0x04, up to 8 pages): standardized writes,
         // endurance used, temperature history, resets.
-        if let Some(log) = data_in(SMART_READ_LOG, 8, 0x04).or_else(|| data_in(SMART_READ_LOG, 1, 0x04)) {
+        if let Some(log) =
+            data_in(SMART_READ_LOG, 8, 0x04).or_else(|| data_in(SMART_READ_LOG, 1, 0x04))
+        {
             for (page, off, value) in parse_device_stats(&log) {
                 apply_device_stat(&mut smart, page, off, value);
             }
@@ -864,7 +894,12 @@ mod linux {
             let product = ascii_trim(&inq[16..32]);
             // SATA disks reached via SCSI INQUIRY report vendor "ATA"; keep the
             // product only, otherwise prepend the real vendor.
-            let model = if vendor.is_empty() || vendor == "ATA" || product.to_ascii_lowercase().starts_with(&vendor.to_ascii_lowercase()) {
+            let model = if vendor.is_empty()
+                || vendor == "ATA"
+                || product
+                    .to_ascii_lowercase()
+                    .starts_with(&vendor.to_ascii_lowercase())
+            {
                 product
             } else {
                 format!("{vendor} {product}")
@@ -885,11 +920,7 @@ mod linux {
             info.wwn = super::parse_vpd83_naa(&vpd83);
         }
 
-        if info.is_empty() {
-            None
-        } else {
-            Some(info)
-        }
+        if info.is_empty() { None } else { Some(info) }
     }
 
     pub fn identity(device: &Device) -> IdInfo {
@@ -1087,8 +1118,8 @@ mod linux {
                 .take_while(|c| c.is_ascii_digit())
                 .collect();
             if !digits.is_empty() {
-                let spd =
-                    fs::read_to_string(format!("/sys/class/ata_link/link{digits}/sata_spd")).ok()?;
+                let spd = fs::read_to_string(format!("/sys/class/ata_link/link{digits}/sata_spd"))
+                    .ok()?;
                 let spd = spd.trim();
                 if !spd.is_empty() && spd != "<unknown>" {
                     return Some(spd.to_string());
@@ -1120,7 +1151,12 @@ mod tests {
     #[test]
     fn parses_wwn_from_identify_and_vpd83() {
         let mut id = [0u8; 512];
-        for (w, v) in [(108, 0x5002u16), (109, 0x538e), (110, 0x1024), (111, 0x9cb0)] {
+        for (w, v) in [
+            (108, 0x5002u16),
+            (109, 0x538e),
+            (110, 0x1024),
+            (111, 0x9cb0),
+        ] {
             id[w * 2..w * 2 + 2].copy_from_slice(&v.to_le_bytes());
         }
         assert_eq!(ata_wwn(&id).as_deref(), Some("5002538e10249cb0"));
@@ -1128,7 +1164,9 @@ mod tests {
         // T10 vendor id designator, then the LU NAA one.
         let mut page = vec![0x00, 0x83, 0x00, 0x00];
         page.extend([0x02, 0x01, 0x00, 0x04, b'A', b'T', b'A', b' ']);
-        page.extend([0x01, 0x03, 0x00, 0x08, 0x50, 0x00, 0xc5, 0x00, 0x71, 0x78, 0x1f, 0x63]);
+        page.extend([
+            0x01, 0x03, 0x00, 0x08, 0x50, 0x00, 0xc5, 0x00, 0x71, 0x78, 0x1f, 0x63,
+        ]);
         page[3] = (page.len() - 4) as u8;
         assert_eq!(parse_vpd83_naa(&page).as_deref(), Some("5000c50071781f63"));
         assert_eq!(parse_vpd83_naa(&[0, 0x80, 0, 0]), None);
@@ -1207,7 +1245,10 @@ mod tests {
         log[512 + 2] = 7;
         log[512 + 8..512 + 16].copy_from_slice(&valid(2));
         let stats = parse_device_stats(&log);
-        assert_eq!(stats, vec![(1, 0x08, 32), (1, 0x18, 4_016_839_893), (7, 0x08, 2)]);
+        assert_eq!(
+            stats,
+            vec![(1, 0x08, 32), (1, 0x18, 4_016_839_893), (7, 0x08, 2)]
+        );
     }
 
     #[test]
@@ -1228,8 +1269,14 @@ mod tests {
             ),
         );
         assert_eq!(s.manufactured, Some((2012, 12)));
-        assert_eq!((s.power_cycles, s.rated_start_stop), (Some(40), Some(50_000)));
-        assert_eq!((s.load_unload, s.rated_load_unload), (Some(1_785), Some(200_000)));
+        assert_eq!(
+            (s.power_cycles, s.rated_start_stop),
+            (Some(40), Some(50_000))
+        );
+        assert_eq!(
+            (s.load_unload, s.rated_load_unload),
+            (Some(1_785), Some(200_000))
+        );
 
         apply_scsi_log(&mut s, 0x06, &log_page(0x06, &[(0x0000, &[0, 0, 0, 38])]));
         assert_eq!(s.non_medium_errors, Some(38));
@@ -1238,7 +1285,10 @@ mod tests {
         st[0] = 5 << 5; // foreground short, result 0 = completed
         st[3] = 1;
         apply_scsi_log(&mut s, 0x10, &log_page(0x10, &[(0x0001, &st)]));
-        assert_eq!(s.last_self_test.as_deref(), Some("Foreground short: completed (at 1 h)"));
+        assert_eq!(
+            s.last_self_test.as_deref(),
+            Some("Foreground short: completed (at 1 h)")
+        );
     }
 
     #[test]
@@ -1309,26 +1359,49 @@ mod tests {
             logical_block_size: Some(512),
             ..Default::default()
         };
-        assert!(apply_scsi_log(&mut s, 0x2F, &log_page(0x2F, &[(0x0000, &[0x00, 0x00, 36])])));
-        assert!(apply_scsi_log(&mut s, 0x0D, &log_page(0x0D, &[(0x0000, &[0, 38]), (0x0001, &[0, 68])])));
+        assert!(apply_scsi_log(
+            &mut s,
+            0x2F,
+            &log_page(0x2F, &[(0x0000, &[0x00, 0x00, 36])])
+        ));
+        assert!(apply_scsi_log(
+            &mut s,
+            0x0D,
+            &log_page(0x0D, &[(0x0000, &[0, 38]), (0x0001, &[0, 68])])
+        ));
         let written = 1_000_000_000_000u64.to_be_bytes();
         assert!(apply_scsi_log(
             &mut s,
             0x02,
             &log_page(0x02, &[(0x0005, &written), (0x0006, &[0, 0, 0, 2])])
         ));
-        assert!(apply_scsi_log(&mut s, 0x03, &log_page(0x03, &[(0x0006, &[0, 0, 0, 1])])));
+        assert!(apply_scsi_log(
+            &mut s,
+            0x03,
+            &log_page(0x03, &[(0x0006, &[0, 0, 0, 1])])
+        ));
         assert!(apply_scsi_log(
             &mut s,
             0x0E,
-            &log_page(0x0E, &[(0x0003, &[0, 0, 0x27, 0x10]), (0x0004, &[0, 0, 0x01, 0x2C])])
+            &log_page(
+                0x0E,
+                &[(0x0003, &[0, 0, 0x27, 0x10]), (0x0004, &[0, 0, 0x01, 0x2C])]
+            )
         ));
         let minutes = (5000u32 * 60).to_be_bytes();
-        assert!(apply_scsi_log(&mut s, 0x15, &log_page(0x15, &[(0x0000, &minutes)])));
+        assert!(apply_scsi_log(
+            &mut s,
+            0x15,
+            &log_page(0x15, &[(0x0000, &minutes)])
+        ));
 
         assert_eq!(s.passed, Some(true));
         assert_eq!(s.temperature_c, Some(38));
-        assert_eq!(s.uncorrectable, Some(3), "write 2 + read 1, not bytes processed");
+        assert_eq!(
+            s.uncorrectable,
+            Some(3),
+            "write 2 + read 1, not bytes processed"
+        );
         assert_eq!(s.bytes_written(), Some(1_000_000_000_000));
         assert_eq!(s.power_cycles, Some(300));
         assert_eq!(s.power_on_hours, Some(5000));
@@ -1337,7 +1410,11 @@ mod tests {
     #[test]
     fn informational_exception_marks_failure() {
         let mut s = SmartData::default();
-        apply_scsi_log(&mut s, 0x2F, &log_page(0x2F, &[(0x0000, &[0x5D, 0x10, 40])]));
+        apply_scsi_log(
+            &mut s,
+            0x2F,
+            &log_page(0x2F, &[(0x0000, &[0x5D, 0x10, 40])]),
+        );
         assert_eq!(s.passed, Some(false));
         assert_eq!(s.temperature_c, Some(40));
     }
@@ -1425,8 +1502,10 @@ mod tests {
     #[test]
     fn parses_scsi_log_parameters() {
         // header (4, page length 11) + param 0x0000 len2 value 33 + param 0x0001 len1 value 5
-        let buf = [0x0d, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x02, 0x00, 0x21,
-                   0x00, 0x01, 0x00, 0x01, 0x05];
+        let buf = [
+            0x0d, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x02, 0x00, 0x21, 0x00, 0x01, 0x00, 0x01,
+            0x05,
+        ];
         let params = parse_log_params(&buf);
         assert_eq!(params.len(), 2);
         assert_eq!(params[0].0, 0x0000);

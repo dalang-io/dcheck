@@ -171,7 +171,11 @@ fn run(base: &str, check_only: bool, force: bool) -> Result<i32, String> {
     if check_only {
         println!(
             "{}",
-            if newer { "an update is available — run `dcheck update`" } else { "dcheck is up to date" }
+            if newer {
+                "an update is available — run `dcheck update`"
+            } else {
+                "dcheck is up to date"
+            }
         );
         return Ok(0);
     }
@@ -196,10 +200,13 @@ fn run(base: &str, check_only: bool, force: bool) -> Result<i32, String> {
     let tarball = tmp.0.join(&pkg);
     fetch_to(&url, &tarball)?;
     let sums = fetch_text(&format!("{base}/v{latest}/SHA256SUMS"), &tmp.0)?;
-    let expected = find_checksum(&sums, &pkg).ok_or_else(|| format!("{pkg} missing from SHA256SUMS"))?;
+    let expected =
+        find_checksum(&sums, &pkg).ok_or_else(|| format!("{pkg} missing from SHA256SUMS"))?;
     let actual = sha256_of(&tarball)?;
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(format!("checksum mismatch for {pkg} (expected {expected}, got {actual})"));
+        return Err(format!(
+            "checksum mismatch for {pkg} (expected {expected}, got {actual})"
+        ));
     }
     println!("checksum ok");
 
@@ -221,7 +228,10 @@ fn run(base: &str, check_only: bool, force: bool) -> Result<i32, String> {
         .map_err(|e| format!("new binary does not run: {e}"))?;
     let reported = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() || !reported.contains(&latest) {
-        return Err(format!("new binary reports '{}', expected {latest}", reported.trim()));
+        return Err(format!(
+            "new binary reports '{}', expected {latest}",
+            reported.trim()
+        ));
     }
 
     replace(&new_bin, &exe)?;
@@ -235,7 +245,10 @@ fn replace(new_bin: &Path, exe: &Path) -> Result<(), String> {
     let staged = exe.with_file_name(".dcheck.update");
     let hint = |e: std::io::Error| {
         if e.kind() == std::io::ErrorKind::PermissionDenied {
-            format!("no permission to write {} — run `sudo dcheck update`", exe.display())
+            format!(
+                "no permission to write {} — run `sudo dcheck update`",
+                exe.display()
+            )
         } else {
             format!("installing to {}: {e}", exe.display())
         }
@@ -265,12 +278,18 @@ mod tests {
     #[test]
     fn finds_checksum_lines() {
         let h = "a".repeat(64);
-        let sums = format!("{h}  dcheck-0.2.0-x86_64-unknown-linux-musl.tar.gz\n{}  other.tar.gz\n", "b".repeat(64));
+        let sums = format!(
+            "{h}  dcheck-0.2.0-x86_64-unknown-linux-musl.tar.gz\n{}  other.tar.gz\n",
+            "b".repeat(64)
+        );
         assert_eq!(
             find_checksum(&sums, "dcheck-0.2.0-x86_64-unknown-linux-musl.tar.gz"),
             Some(h.as_str())
         );
         assert_eq!(find_checksum(&sums, "missing.tar.gz"), None);
-        assert_eq!(find_checksum(&format!("{h} *x.tar.gz"), "x.tar.gz"), Some(h.as_str()));
+        assert_eq!(
+            find_checksum(&format!("{h} *x.tar.gz"), "x.tar.gz"),
+            Some(h.as_str())
+        );
     }
 }

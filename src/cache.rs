@@ -53,7 +53,10 @@ fn memory() -> &'static Mutex<HashMap<String, Entry>> {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Identity of a physical disk at a path: a swap changes the key. The WWID
@@ -99,10 +102,16 @@ fn cache_file() -> Option<PathBuf> {
 fn load_disk() -> HashMap<String, Entry> {
     let mut out = HashMap::new();
     let Some(path) = cache_file() else { return out };
-    let Ok(text) = std::fs::read_to_string(path) else { return out };
-    let Some(Json::Obj(map)) = Json::parse(&text) else { return out };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let Some(Json::Obj(map)) = Json::parse(&text) else {
+        return out;
+    };
     for (k, v) in map {
-        let Some(at) = v.get("at").and_then(Json::as_u64) else { continue };
+        let Some(at) = v.get("at").and_then(Json::as_u64) else {
+            continue;
+        };
         let smart = match v.get("smart") {
             Some(Json::Null) | None => None,
             Some(s) => match SmartData::from_json(s) {
@@ -122,8 +131,15 @@ fn save_disk(entries: &HashMap<String, Entry>) {
         .iter()
         .filter(|(_, e)| e.at >= limit)
         .map(|(k, e)| {
-            let smart = e.smart.as_ref().map(SmartData::to_json).unwrap_or(Json::Null);
-            (k.as_str(), json::object(vec![("at", json::num(e.at as f64)), ("smart", smart)]))
+            let smart = e
+                .smart
+                .as_ref()
+                .map(SmartData::to_json)
+                .unwrap_or(Json::Null);
+            (
+                k.as_str(),
+                json::object(vec![("at", json::num(e.at as f64)), ("smart", smart)]),
+            )
         })
         .collect();
     let text = json::object(obj).to_string();
@@ -176,7 +192,10 @@ pub fn smart(d: &Device, read: impl FnOnce() -> Option<SmartData>) -> Option<Sma
         }
     }
     let value = read();
-    let entry = Entry { at: now(), smart: value.clone() };
+    let entry = Entry {
+        at: now(),
+        smart: value.clone(),
+    };
     if let Ok(mut m) = memory().lock() {
         m.insert(k.clone(), entry.clone());
     }

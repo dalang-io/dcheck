@@ -58,7 +58,13 @@ pub fn detect_from(dmi: &[&str], hyp_type: Option<&str>, cpu_flag: bool) -> Opti
         "Hyper-V"
     } else if has("xen") || hyp_type == Some("xen") {
         "Xen"
-    } else if has("qemu") || has("kvm") || has("bochs") || has("amazon ec2") || has("google") || has("openstack") {
+    } else if has("qemu")
+        || has("kvm")
+        || has("bochs")
+        || has("amazon ec2")
+        || has("google")
+        || has("openstack")
+    {
         "KVM / QEMU"
     } else if has("parallels") {
         "Parallels"
@@ -67,7 +73,10 @@ pub fn detect_from(dmi: &[&str], hyp_type: Option<&str>, cpu_flag: bool) -> Opti
     } else {
         return None;
     };
-    Some(Virt { hypervisor: hv.into(), cloud })
+    Some(Virt {
+        hypervisor: hv.into(),
+        cloud,
+    })
 }
 
 /// This machine's hypervisor, if it is a VM (read once).
@@ -87,15 +96,26 @@ pub fn detect() -> Option<Virt> {
 }
 
 pub fn read_from(root: &Path) -> Option<Virt> {
-    let rd = |p: &str| std::fs::read_to_string(root.join(p)).ok().map(|s| s.trim().to_string());
-    let dmi: Vec<String> = ["sys_vendor", "product_name", "board_vendor", "bios_vendor", "chassis_vendor"]
-        .iter()
-        .filter_map(|f| rd(&format!("sys/class/dmi/id/{f}")))
-        .collect();
+    let rd = |p: &str| {
+        std::fs::read_to_string(root.join(p))
+            .ok()
+            .map(|s| s.trim().to_string())
+    };
+    let dmi: Vec<String> = [
+        "sys_vendor",
+        "product_name",
+        "board_vendor",
+        "bios_vendor",
+        "chassis_vendor",
+    ]
+    .iter()
+    .filter_map(|f| rd(&format!("sys/class/dmi/id/{f}")))
+    .collect();
     let dmi_refs: Vec<&str> = dmi.iter().map(String::as_str).collect();
     let hyp = rd("sys/hypervisor/type");
     let cpu_flag = rd("proc/cpuinfo").is_some_and(|c| {
-        c.lines().any(|l| l.starts_with("flags") && l.split_whitespace().any(|f| f == "hypervisor"))
+        c.lines()
+            .any(|l| l.starts_with("flags") && l.split_whitespace().any(|f| f == "hypervisor"))
     });
     detect_from(&dmi_refs, hyp.as_deref(), cpu_flag)
 }
@@ -105,7 +125,12 @@ pub fn is_virtual_disk(d: &Device) -> bool {
     if d.bus == Bus::Virtio || d.name.starts_with("vd") || d.name.starts_with("xvd") {
         return true;
     }
-    let id = format!("{} {}", d.vendor.as_deref().unwrap_or(""), d.model.as_deref().unwrap_or("")).to_ascii_lowercase();
+    let id = format!(
+        "{} {}",
+        d.vendor.as_deref().unwrap_or(""),
+        d.model.as_deref().unwrap_or("")
+    )
+    .to_ascii_lowercase();
     [
         "qemu harddisk",
         "qemu hardisk",
@@ -134,8 +159,7 @@ pub fn kind_label(d: &Device) -> String {
 }
 
 /// Why a virtual disk has no health data.
-pub const DISK_NOTE: &str =
-    "virtual disk: the hypervisor exposes no SMART; the physical disks belong to the host / provider";
+pub const DISK_NOTE: &str = "virtual disk: the hypervisor exposes no SMART; the physical disks belong to the host / provider";
 
 #[cfg(test)]
 mod tests {
@@ -144,18 +168,47 @@ mod tests {
     #[test]
     fn detects_hypervisors() {
         // idch (IDCloudHost): QEMU i440FX with SeaBIOS.
-        let v = detect_from(&["QEMU", "Standard PC (i440FX + PIIX, 1996)", "SeaBIOS"], None, true).unwrap();
+        let v = detect_from(
+            &["QEMU", "Standard PC (i440FX + PIIX, 1996)", "SeaBIOS"],
+            None,
+            true,
+        )
+        .unwrap();
         assert_eq!(v.hypervisor, "KVM / QEMU");
         assert_eq!(v.cloud, None);
-        assert_eq!(detect_from(&["VMware, Inc.", "VMware Virtual Platform"], None, true).unwrap().hypervisor, "VMware");
-        assert_eq!(detect_from(&["Microsoft Corporation", "Virtual Machine"], None, true).unwrap().hypervisor, "Hyper-V");
-        assert_eq!(detect_from(&["innotek GmbH", "VirtualBox"], None, true).unwrap().hypervisor, "VirtualBox");
+        assert_eq!(
+            detect_from(&["VMware, Inc.", "VMware Virtual Platform"], None, true)
+                .unwrap()
+                .hypervisor,
+            "VMware"
+        );
+        assert_eq!(
+            detect_from(&["Microsoft Corporation", "Virtual Machine"], None, true)
+                .unwrap()
+                .hypervisor,
+            "Hyper-V"
+        );
+        assert_eq!(
+            detect_from(&["innotek GmbH", "VirtualBox"], None, true)
+                .unwrap()
+                .hypervisor,
+            "VirtualBox"
+        );
         let ec2 = detect_from(&["Amazon EC2", "t3.micro"], None, true).unwrap();
         assert_eq!(ec2.label(), "KVM / QEMU (Amazon EC2)");
-        assert_eq!(detect_from(&[], Some("xen"), false).unwrap().hypervisor, "Xen");
-        assert_eq!(detect_from(&["Some Cloud"], None, true).unwrap().hypervisor, "virtual machine");
+        assert_eq!(
+            detect_from(&[], Some("xen"), false).unwrap().hypervisor,
+            "Xen"
+        );
+        assert_eq!(
+            detect_from(&["Some Cloud"], None, true).unwrap().hypervisor,
+            "virtual machine"
+        );
         // Bare metal.
-        assert_eq!(detect_from(&["Dell Inc.", "PowerEdge R630"], None, false), None);
+        assert_eq!(
+            detect_from(&["Dell Inc.", "PowerEdge R630"], None, false),
+            None
+        );
     }
 
     #[test]

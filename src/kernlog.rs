@@ -39,16 +39,22 @@ fn split_port(msg: &str) -> Option<(u32, &str)> {
     }
     let after = &rest[digits.len()..];
     // Optional ".00" device suffix, then ':'.
-    let after = after.strip_prefix('.').map_or(after, |a| a.trim_start_matches(|c: char| c.is_ascii_digit()));
+    let after = after.strip_prefix('.').map_or(after, |a| {
+        a.trim_start_matches(|c: char| c.is_ascii_digit())
+    });
     let text = after.strip_prefix(':')?;
     Some((digits.parse().ok()?, text.trim()))
 }
 
 /// Fold kernel messages (in order) into per-port states.
-pub fn ata_port_states<'a>(messages: impl IntoIterator<Item = &'a str>) -> BTreeMap<u32, PortState> {
+pub fn ata_port_states<'a>(
+    messages: impl IntoIterator<Item = &'a str>,
+) -> BTreeMap<u32, PortState> {
     let mut ports: BTreeMap<u32, PortState> = BTreeMap::new();
     for msg in messages {
-        let Some((port, text)) = split_port(msg) else { continue };
+        let Some((port, text)) = split_port(msg) else {
+            continue;
+        };
         let st = ports.entry(port).or_default();
         if text.contains("configured for") || text.contains("SATA link down") {
             // Working again (or nothing attached): clear any failure.
@@ -145,16 +151,27 @@ ata1: reset failed, giving up";
         let st = ata_port_states(LAB_243.lines());
         let a1 = &st[&1];
         assert!(a1.failed.as_deref().unwrap().contains("never became ready"));
-        assert!(a1.failed.as_deref().unwrap().contains("3 × \"link is slow to respond\""));
+        assert!(
+            a1.failed
+                .as_deref()
+                .unwrap()
+                .contains("3 × \"link is slow to respond\"")
+        );
         assert!(a1.failed.as_deref().unwrap().contains("speed was reduced"));
         assert_eq!(st[&3].failed, None);
     }
 
     #[test]
     fn recovery_or_unplug_clears_failure() {
-        let msgs = ["ata2: reset failed, giving up", "ata2: SATA link down (SStatus 0 SControl 300)"];
+        let msgs = [
+            "ata2: reset failed, giving up",
+            "ata2: SATA link down (SStatus 0 SControl 300)",
+        ];
         assert_eq!(ata_port_states(msgs).get(&2).unwrap().failed, None);
-        let msgs = ["ata2: reset failed, giving up", "ata2.00: configured for UDMA/133"];
+        let msgs = [
+            "ata2: reset failed, giving up",
+            "ata2.00: configured for UDMA/133",
+        ];
         assert_eq!(ata_port_states(msgs).get(&2).unwrap().failed, None);
     }
 

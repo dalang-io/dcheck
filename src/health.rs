@@ -102,7 +102,10 @@ pub fn evaluate(device: &Device, smart: &SmartData) -> Health {
         notes.push(err.clone());
     }
     if let Some(reason) = &device.failure {
-        issues.push(format!("{}: {reason} — drive dead or incompatible", device.name));
+        issues.push(format!(
+            "{}: {reason} — drive dead or incompatible",
+            device.name
+        ));
     }
 
     let tbw_bytes = smart.bytes_written();
@@ -110,23 +113,34 @@ pub fn evaluate(device: &Device, smart: &SmartData) -> Health {
 
     // SMART counters that indicate trouble.
     if smart.reallocated.unwrap_or(0) > 0 {
-        issues.push(format!("{} reallocated sectors", smart.reallocated.unwrap()));
+        issues.push(format!(
+            "{} reallocated sectors",
+            smart.reallocated.unwrap()
+        ));
     }
     if smart.pending.unwrap_or(0) > 0 {
         issues.push(format!("{} pending sectors", smart.pending.unwrap()));
     }
     if smart.uncorrectable.unwrap_or(0) > 0 {
-        issues.push(format!("{} offline-uncorrectable sectors", smart.uncorrectable.unwrap()));
+        issues.push(format!(
+            "{} offline-uncorrectable sectors",
+            smart.uncorrectable.unwrap()
+        ));
     }
     if smart.crc_errors.unwrap_or(0) > 0 {
-        issues.push(format!("{} UDMA CRC errors (check cable/port)", smart.crc_errors.unwrap()));
+        issues.push(format!(
+            "{} UDMA CRC errors (check cable/port)",
+            smart.crc_errors.unwrap()
+        ));
     }
     if smart.media_errors.unwrap_or(0) > 0 {
         issues.push(format!("{} NVMe media errors", smart.media_errors.unwrap()));
     }
     if let (Some(spare), Some(thresh)) = (smart.available_spare, smart.available_spare_threshold) {
         if spare < thresh {
-            issues.push(format!("available spare {spare}% below threshold {thresh}%"));
+            issues.push(format!(
+                "available spare {spare}% below threshold {thresh}%"
+            ));
         }
     }
     if let Some(t) = smart.critical_temp_time {
@@ -206,8 +220,8 @@ pub fn evaluate(device: &Device, smart: &SmartData) -> Health {
 
     // HDDs have no endurance rating: compare runtime and mechanical cycles
     // with the design life / rated counts and extrapolate the dominant one.
-    let is_hdd = device.kind == crate::model::MediaKind::Hdd
-        || smart.rotation_rate.is_some_and(|r| r > 0);
+    let is_hdd =
+        device.kind == crate::model::MediaKind::Hdd || smart.rotation_rate.is_some_and(|r| r > 0);
     let mut design_life_used = None;
     let mut design_limit = None;
     let mut overdue_poh = None;
@@ -546,7 +560,10 @@ mod tests {
     #[test]
     fn rated_tbw_known_and_override() {
         // Built-in table.
-        assert_eq!(rated_tbw_table("kingston sa400s37", 240_000_000_000), Some(80_000_000_000_000));
+        assert_eq!(
+            rated_tbw_table("kingston sa400s37", 240_000_000_000),
+            Some(80_000_000_000_000)
+        );
         assert_eq!(rated_tbw_table("unknown model", 240_000_000_000), None);
         // User override takes precedence (pure matcher).
         let ov = vec![("sa400".to_string(), 999.0)];

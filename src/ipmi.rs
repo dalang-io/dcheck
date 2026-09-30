@@ -70,20 +70,12 @@ pub struct Sdr {
 
 fn nibble_signed(v: u8) -> i32 {
     let v = (v & 0x0F) as i32;
-    if v >= 8 {
-        v - 16
-    } else {
-        v
-    }
+    if v >= 8 { v - 16 } else { v }
 }
 
 fn ten_bit_signed(ls: u8, ms: u8) -> i32 {
     let v = ((ms as i32 & 0xC0) << 2) | ls as i32;
-    if v & 0x200 != 0 {
-        v - 0x400
-    } else {
-        v
-    }
+    if v & 0x200 != 0 { v - 0x400 } else { v }
 }
 
 fn unit_name(code: u8) -> &'static str {
@@ -114,7 +106,12 @@ pub fn parse_sdr(rec: &[u8]) -> Option<Sdr> {
     let len = (*rec.get(name_at)? & 0x1F) as usize;
     let name = rec
         .get(name_at + 1..name_at + 1 + len)
-        .map(|b| String::from_utf8_lossy(b).trim_matches(char::from(0)).trim().to_string())
+        .map(|b| {
+            String::from_utf8_lossy(b)
+                .trim_matches(char::from(0))
+                .trim()
+                .to_string()
+        })
         .unwrap_or_default();
     let mut s = Sdr {
         number: rec[7],
@@ -134,7 +131,11 @@ pub fn parse_sdr(rec: &[u8]) -> Option<Sdr> {
             let b = ten_bit_signed(rec[26], rec[27]);
             let (rexp, bexp) = (nibble_signed(rec[29] >> 4), nibble_signed(rec[29]));
             // Units 1 bit 0: the reading is a percentage.
-            let unit = if rec[20] & 1 != 0 { "%" } else { unit_name(rec[21]) };
+            let unit = if rec[20] & 1 != 0 {
+                "%"
+            } else {
+                unit_name(rec[21])
+            };
             s.conv = Some((m, b, bexp, rexp, format, unit));
         }
     }
@@ -165,7 +166,10 @@ pub fn discrete_state(kind: u8, event_type: u8, bits: u16) -> Option<(String, St
     let pick = |list: &[(u16, &str, Status)]| {
         let hits: Vec<&(u16, &str, Status)> = list.iter().filter(|(b, _, _)| on(*b)).collect();
         let status = hits.iter().map(|h| h.2).max()?;
-        Some((hits.iter().map(|h| h.1).collect::<Vec<_>>().join(", "), status))
+        Some((
+            hits.iter().map(|h| h.1).collect::<Vec<_>>().join(", "),
+            status,
+        ))
     };
     match (event_type, kind) {
         // Redundancy (generic 0x0B).
@@ -184,7 +188,10 @@ pub fn discrete_state(kind: u8, event_type: u8, bits: u16) -> Option<(String, St
             (5, "AC out of range", Status::Warn),
             (6, "configuration error", Status::Warn),
         ]),
-        (0x6F, 0x05) => pick(&[(0, "chassis opened", Status::Warn), (4, "LAN leash lost", Status::Warn)]),
+        (0x6F, 0x05) => pick(&[
+            (0, "chassis opened", Status::Warn),
+            (4, "LAN leash lost", Status::Warn),
+        ]),
         (0x6F, 0x07) => pick(&[
             (0, "IERR", Status::Crit),
             (1, "thermal trip", Status::Crit),
@@ -202,8 +209,16 @@ pub fn discrete_state(kind: u8, event_type: u8, bits: u16) -> Option<(String, St
             (8, "spare", Status::Ok),
             (10, "critical overtemperature", Status::Crit),
         ]),
-        (0x6F, 0x0D) => pick(&[(0, "drive present", Status::Ok), (1, "drive fault", Status::Crit), (2, "predictive failure", Status::Warn)]),
-        (0x6F, 0x29) => pick(&[(0, "battery low", Status::Warn), (1, "battery failed", Status::Crit), (2, "battery present", Status::Ok)]),
+        (0x6F, 0x0D) => pick(&[
+            (0, "drive present", Status::Ok),
+            (1, "drive fault", Status::Crit),
+            (2, "predictive failure", Status::Warn),
+        ]),
+        (0x6F, 0x29) => pick(&[
+            (0, "battery low", Status::Warn),
+            (1, "battery failed", Status::Crit),
+            (2, "battery present", Status::Ok),
+        ]),
         (0x6F, 0x09) => pick(&[
             (4, "AC lost", Status::Crit),
             (5, "soft power control failure", Status::Warn),
@@ -300,7 +315,11 @@ pub fn parse_sel(rec: &[u8], names: &dyn Fn(u8) -> Option<String>) -> Option<Eve
                 11 => "upper non-recoverable going high",
                 _ => "threshold crossed",
             };
-            let st = if matches!(offset, 2 | 4 | 9 | 11) { Status::Crit } else { Status::Warn };
+            let st = if matches!(offset, 2 | 4 | 9 | 11) {
+                Status::Crit
+            } else {
+                Status::Warn
+            };
             (what.to_string(), st)
         }
         t => match discrete_state(kind, t, 1u16 << offset) {
@@ -311,8 +330,13 @@ pub fn parse_sel(rec: &[u8], names: &dyn Fn(u8) -> Option<String>) -> Option<Eve
                 (0x13, _) => ("critical interrupt (PCIe / NMI)".into(), Status::Crit),
                 (0x1D, _) => ("boot".into(), Status::Ok),
                 (0x0F, _) => ("POST error".into(), Status::Warn),
-                (k, _) if k >= 0xC0 || sensor_type_name(k) == "Sensor" => (format!("OEM event (sensor type {k:#04x})"), Status::Ok),
-                _ => (format!("{} event (offset {offset})", sensor_type_name(kind)), Status::Ok),
+                (k, _) if k >= 0xC0 || sensor_type_name(k) == "Sensor" => {
+                    (format!("OEM event (sensor type {k:#04x})"), Status::Ok)
+                }
+                _ => (
+                    format!("{} event (offset {offset})", sensor_type_name(kind)),
+                    Status::Ok,
+                ),
             },
         },
     };
@@ -320,7 +344,12 @@ pub fn parse_sel(rec: &[u8], names: &dyn Fn(u8) -> Option<String>) -> Option<Eve
         text.push_str(" — cleared");
         status = Status::Ok;
     }
-    Some(Event { time, sensor, text, status })
+    Some(Event {
+        time,
+        sensor,
+        text,
+        status,
+    })
 }
 
 // ─── transport ──────────────────────────────────────────────────────────────
@@ -403,19 +432,32 @@ mod dev {
         pub fn cmd_lun(&mut self, netfn: u8, cmd: u8, data: &[u8], lun: u8) -> Result<Vec<u8>, u8> {
             let fd = self.f.as_raw_fd();
             self.id += 1;
-            let mut addr = SysIfAddr { addr_type: 0x0C, channel: 0x0F, lun };
+            let mut addr = SysIfAddr {
+                addr_type: 0x0C,
+                channel: 0x0F,
+                lun,
+            };
             let mut payload = data.to_vec();
             let mut req = IpmiReq {
                 addr: (&mut addr as *mut SysIfAddr).cast(),
                 addr_len: std::mem::size_of::<SysIfAddr>() as u32,
                 msgid: self.id,
-                msg: IpmiMsg { netfn, cmd, data_len: payload.len() as u16, data: payload.as_mut_ptr() },
+                msg: IpmiMsg {
+                    netfn,
+                    cmd,
+                    data_len: payload.len() as u16,
+                    data: payload.as_mut_ptr(),
+                },
             };
             if unsafe { ioctl(fd, SEND, &mut req as *mut IpmiReq) } != 0 {
                 return Err(0xFF);
             }
             for _ in 0..8 {
-                let mut p = PollFd { fd, events: 1, revents: 0 };
+                let mut p = PollFd {
+                    fd,
+                    events: 1,
+                    revents: 0,
+                };
                 if unsafe { poll(&mut p, 1, 5000) } <= 0 {
                     return Err(0xFE);
                 }
@@ -426,7 +468,12 @@ mod dev {
                     addr: raddr.as_mut_ptr(),
                     addr_len: raddr.len() as u32,
                     msgid: 0,
-                    msg: IpmiMsg { netfn: 0, cmd: 0, data_len: buf.len() as u16, data: buf.as_mut_ptr() },
+                    msg: IpmiMsg {
+                        netfn: 0,
+                        cmd: 0,
+                        data_len: buf.len() as u16,
+                        data: buf.as_mut_ptr(),
+                    },
                 };
                 if unsafe { ioctl(fd, RECV, &mut recv as *mut IpmiRecv) } != 0 {
                     return Err(0xFD);
@@ -438,7 +485,11 @@ mod dev {
                 if n == 0 {
                     return Err(0xFC);
                 }
-                return if buf[0] == 0 { Ok(buf[1..n].to_vec()) } else { Err(buf[0]) };
+                return if buf[0] == 0 {
+                    Ok(buf[1..n].to_vec())
+                } else {
+                    Err(buf[0])
+                };
             }
             Err(0xFB)
         }
@@ -457,14 +508,24 @@ pub fn read() -> Option<Ipmi> {
     }
     // SDR repository.
     let mut sdrs = Vec::new();
-    let resv = bmc.cmd(0x0A, 0x22, &[]).ok().filter(|r| r.len() >= 2).map(|r| [r[0], r[1]]).unwrap_or([0, 0]);
+    let resv = bmc
+        .cmd(0x0A, 0x22, &[])
+        .ok()
+        .filter(|r| r.len() >= 2)
+        .map(|r| [r[0], r[1]])
+        .unwrap_or([0, 0]);
     let mut id: u16 = 0;
     for _ in 0..512 {
-        let hdr = match bmc.cmd(0x0A, 0x23, &[resv[0], resv[1], id as u8, (id >> 8) as u8, 0, 5]) {
+        let hdr = match bmc.cmd(
+            0x0A,
+            0x23,
+            &[resv[0], resv[1], id as u8, (id >> 8) as u8, 0, 5],
+        ) {
             Ok(h) if h.len() >= 7 => h,
             Ok(_) => break,
             Err(e) => {
-                out.error.get_or_insert(format!("SDR read failed (code {e:#04x})"));
+                out.error
+                    .get_or_insert(format!("SDR read failed (code {e:#04x})"));
                 break;
             }
         };
@@ -474,7 +535,11 @@ pub fn read() -> Option<Ipmi> {
         let mut off = 5usize;
         while off < len + 5 {
             let n = (len + 5 - off).min(16) as u8;
-            match bmc.cmd(0x0A, 0x23, &[resv[0], resv[1], id as u8, (id >> 8) as u8, off as u8, n]) {
+            match bmc.cmd(
+                0x0A,
+                0x23,
+                &[resv[0], resv[1], id as u8, (id >> 8) as u8, off as u8, n],
+            ) {
                 Ok(d) if d.len() > 2 => {
                     rec.extend(&d[2..]);
                     off += d.len() - 2;
@@ -496,18 +561,35 @@ pub fn read() -> Option<Ipmi> {
         if s.owner != 0x20 {
             continue;
         }
-        let Ok(r) = bmc.cmd_lun(0x04, 0x2D, &[s.number], s.lun) else { continue };
+        let Ok(r) = bmc.cmd_lun(0x04, 0x2D, &[s.number], s.lun) else {
+            continue;
+        };
         if r.len() < 2 || r[1] & 0x20 != 0 || r[1] & 0x40 == 0 {
             continue; // reading unavailable / scanning disabled
         }
         if s.event_type == 0x01 {
             let value = s.conv.map(|c| (convert(r[0], c), c.5));
             let status = r.get(2).map_or(Status::Ok, |b| threshold_status(*b));
-            out.sensors.push(Sensor { name: s.name.clone(), kind: s.kind, entity: s.entity, value, state: None, status });
+            out.sensors.push(Sensor {
+                name: s.name.clone(),
+                kind: s.kind,
+                entity: s.entity,
+                value,
+                state: None,
+                status,
+            });
         } else {
-            let bits = u16::from_le_bytes([*r.get(2).unwrap_or(&0), *r.get(3).unwrap_or(&0) & 0x7F]);
+            let bits =
+                u16::from_le_bytes([*r.get(2).unwrap_or(&0), *r.get(3).unwrap_or(&0) & 0x7F]);
             if let Some((state, status)) = discrete_state(s.kind, s.event_type, bits) {
-                out.sensors.push(Sensor { name: s.name.clone(), kind: s.kind, entity: s.entity, value: None, state: Some(state), status });
+                out.sensors.push(Sensor {
+                    name: s.name.clone(),
+                    kind: s.kind,
+                    entity: s.entity,
+                    value: None,
+                    state: Some(state),
+                    status,
+                });
             }
         }
     }
@@ -522,7 +604,9 @@ pub fn read() -> Option<Ipmi> {
     let mut rid: u16 = 0;
     let mut events = Vec::new();
     for _ in 0..4096 {
-        let Ok(r) = bmc.cmd(0x0A, 0x43, &[0, 0, rid as u8, (rid >> 8) as u8, 0, 0xFF]) else { break };
+        let Ok(r) = bmc.cmd(0x0A, 0x43, &[0, 0, rid as u8, (rid >> 8) as u8, 0, 0xFF]) else {
+            break;
+        };
         if r.len() < 18 {
             break;
         }
@@ -603,16 +687,34 @@ mod tests {
         assert_eq!(st, Status::Crit);
         assert_eq!(text, "present, AC lost");
         assert_eq!(discrete_state(0x08, 0x6F, 0b1).unwrap().1, Status::Ok);
-        assert_eq!(discrete_state(0x0B, 0x0B, 0b10).unwrap(), ("redundancy lost".to_string(), Status::Warn));
+        assert_eq!(
+            discrete_state(0x0B, 0x0B, 0b10).unwrap(),
+            ("redundancy lost".to_string(), Status::Warn)
+        );
     }
 
     #[test]
     fn duplicate_names_get_their_entity() {
-        let mk = |name: &str, e: (u8, u8)| Sensor { name: name.into(), kind: 0x08, entity: e, value: None, state: None, status: Status::Ok };
-        let mut v = vec![mk("Status", (0x0A, 1)), mk("Status", (0x0A, 2)), mk("Temp", (0x03, 1)), mk("Inlet Temp", (0x07, 1))];
+        let mk = |name: &str, e: (u8, u8)| Sensor {
+            name: name.into(),
+            kind: 0x08,
+            entity: e,
+            value: None,
+            state: None,
+            status: Status::Ok,
+        };
+        let mut v = vec![
+            mk("Status", (0x0A, 1)),
+            mk("Status", (0x0A, 2)),
+            mk("Temp", (0x03, 1)),
+            mk("Inlet Temp", (0x07, 1)),
+        ];
         disambiguate(&mut v);
         let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["Status (PSU 1)", "Status (PSU 2)", "Temp", "Inlet Temp"]);
+        assert_eq!(
+            names,
+            ["Status (PSU 1)", "Status (PSU 2)", "Temp", "Inlet Temp"]
+        );
     }
 
     #[test]

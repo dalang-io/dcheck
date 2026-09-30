@@ -47,6 +47,12 @@ use crate::report::human_size_bin;
 pub trait Source {
     fn read_at(&self, off: u64, buf: &mut [u8]) -> io::Result<()>;
     fn len(&self) -> u64;
+    /// Present because the trait is now public from the library (it was
+    /// crate-private while dcheck was a single binary, so the lint never saw
+    /// it). Both impls derive it.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl Source for Vec<u8> {
@@ -107,7 +113,10 @@ fn u64le(b: &[u8], o: usize) -> u64 {
 }
 
 fn utf16(b: &[u8]) -> String {
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = b
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -177,14 +186,23 @@ pub struct VolMap {
 
 /// Build a map from "is cluster N allocated" over the cluster heap
 /// (`heap` = byte offset of cluster `first` in the volume).
-fn vol_map(vol: &Volume, fs: &str, heap: u64, cs: u64, first: u64, count: u64, used: impl Fn(u64) -> bool) -> VolMap {
+fn vol_map(
+    vol: &Volume,
+    fs: &str,
+    heap: u64,
+    cs: u64,
+    first: u64,
+    count: u64,
+    used: impl Fn(u64) -> bool,
+) -> VolMap {
     let mut sum = vec![0f64; MAP_CELLS];
     let mut n = vec![0f64; MAP_CELLS];
     let step = (count / (MAP_CELLS as u64 * 256)).max(1); // sample big volumes
     let mut c = 0;
     while c < count {
         let byte = heap + c * cs;
-        let cell = ((byte as u128 * MAP_CELLS as u128 / vol.size.max(1) as u128) as usize).min(MAP_CELLS - 1);
+        let cell = ((byte as u128 * MAP_CELLS as u128 / vol.size.max(1) as u128) as usize)
+            .min(MAP_CELLS - 1);
         n[cell] += 1.0;
         if used(first + c) {
             sum[cell] += 1.0;
@@ -192,11 +210,25 @@ fn vol_map(vol: &Volume, fs: &str, heap: u64, cs: u64, first: u64, count: u64, u
         c += step;
     }
     // Metadata before the heap (boot sector, FAT) counts as used.
-    let meta_cells = ((heap as u128 * MAP_CELLS as u128 / vol.size.max(1) as u128) as usize).min(MAP_CELLS);
+    let meta_cells =
+        ((heap as u128 * MAP_CELLS as u128 / vol.size.max(1) as u128) as usize).min(MAP_CELLS);
     let used = (0..MAP_CELLS)
-        .map(|i| if i < meta_cells { 1.0 } else if n[i] > 0.0 { (sum[i] / n[i]) as f32 } else { 0.0 })
+        .map(|i| {
+            if i < meta_cells {
+                1.0
+            } else if n[i] > 0.0 {
+                (sum[i] / n[i]) as f32
+            } else {
+                0.0
+            }
+        })
         .collect();
-    VolMap { volume: format!("{} ({fs})", vol.label), base: vol.base, size: vol.size, used }
+    VolMap {
+        volume: format!("{} ({fs})", vol.label),
+        base: vol.base,
+        size: vol.size,
+        used,
+    }
 }
 
 // ─── partitions ─────────────────────────────────────────────────────────────
@@ -226,7 +258,12 @@ fn fs_at(src: &dyn Source, base: u64) -> Option<&'static str> {
 /// Filesystems on the source: the device itself, or its MBR / GPT partitions.
 pub fn volumes(src: &dyn Source) -> Vec<Volume> {
     if let Some(fs) = fs_at(src, 0) {
-        return vec![Volume { label: "whole device".into(), fs, base: 0, size: src.len() }];
+        return vec![Volume {
+            label: "whole device".into(),
+            fs,
+            base: 0,
+            size: src.len(),
+        }];
     }
     let mut parts: Vec<(u64, u64)> = Vec::new();
     if let Ok(gpt) = read(src, 512, 512) {
@@ -261,7 +298,12 @@ pub fn volumes(src: &dyn Source) -> Vec<Volume> {
         .into_iter()
         .enumerate()
         .filter_map(|(i, (base, size))| {
-            fs_at(src, base).map(|fs| Volume { label: format!("partition {}", i + 1), fs, base, size })
+            fs_at(src, base).map(|fs| Volume {
+                label: format!("partition {}", i + 1),
+                fs,
+                base,
+                size,
+            })
         })
         .collect()
 }
@@ -342,10 +384,21 @@ fn fat32(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
         return Err(io::Error::other("bad FAT32 boot sector"));
     }
     let raw = read(src, vol.base + reserved * bps, (fatsz * bps) as usize)?;
-    let fat: Vec<u32> = raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-    let f = Fat32 { src, base: vol.base, cs: bps * spc, data: (reserved + nfats * fatsz) * bps, fat };
+    let fat: Vec<u32> = raw
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    let f = Fat32 {
+        src,
+        base: vol.base,
+        cs: bps * spc,
+        data: (reserved + nfats * fatsz) * bps,
+        fat,
+    };
     let count = (vol.size.saturating_sub(f.data) / f.cs).min(f.fat.len() as u64 - 2);
-    let map = vol_map(vol, "FAT32", f.data, f.cs, 2, count, |c| f.fat.get(c as usize).is_some_and(|v| v & 0x0FFF_FFFF != 0));
+    let map = vol_map(vol, "FAT32", f.data, f.cs, 2, count, |c| {
+        f.fat.get(c as usize).is_some_and(|v| v & 0x0FFF_FFFF != 0)
+    });
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     // (first cluster, path, directory is deleted)
@@ -356,7 +409,9 @@ fn fat32(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
         }
         let clusters = if dir_deleted {
             // Chain cleared: read contiguous clusters (directories are small).
-            (dir..dir.saturating_add(8)).filter(|c| f.valid(*c)).collect()
+            (dir..dir.saturating_add(8))
+                .filter(|c| f.valid(*c))
+                .collect()
         } else {
             f.chain(dir)
         };
@@ -375,7 +430,13 @@ fn fat32(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
                 continue;
             }
             let deleted = e[0] == 0xE5;
-            let long: Vec<u16> = parts.iter().rev().flatten().copied().take_while(|u| *u != 0 && *u != 0xFFFF).collect();
+            let long: Vec<u16> = parts
+                .iter()
+                .rev()
+                .flatten()
+                .copied()
+                .take_while(|u| *u != 0 && *u != 0xFFFF)
+                .collect();
             let name = if !long.is_empty() {
                 String::from_utf16_lossy(&long)
             } else {
@@ -398,8 +459,13 @@ fn fat32(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
                 continue;
             }
             let n = size.div_ceil(f.cs).max(1);
-            let clusters: Vec<u32> = (first..first.saturating_add(n as u32)).filter(|c| f.valid(*c)).collect();
-            let used = clusters.iter().filter(|c| f.fat[**c as usize] & 0x0FFF_FFFF != 0).count();
+            let clusters: Vec<u32> = (first..first.saturating_add(n as u32))
+                .filter(|c| f.valid(*c))
+                .collect();
+            let used = clusters
+                .iter()
+                .filter(|c| f.fat[**c as usize] & 0x0FFF_FFFF != 0)
+                .count();
             out.push(Deleted {
                 volume: format!("{} (FAT32)", vol.label),
                 path,
@@ -432,7 +498,10 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
     let count = u32le(&b, 92);
     let root = u32le(&b, 96);
     let fat_raw = read(src, vol.base + fat_off, (count as usize + 2) * 4)?;
-    let fat: Vec<u32> = fat_raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let fat: Vec<u32> = fat_raw
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
     let off = |c: u32| vol.base + heap + (c as u64 - 2) * cs;
     let valid = |c: u32| c >= 2 && c < count + 2;
     let chain = |mut c: u32| {
@@ -471,7 +540,9 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
         let i = (c - 2) as usize;
         bitmap.get(i / 8).is_some_and(|b| b & (1 << (i % 8)) != 0)
     };
-    let map = vol_map(vol, "exFAT", heap, cs, 2, count as u64, |c| in_use(c as u32));
+    let map = vol_map(vol, "exFAT", heap, cs, 2, count as u64, |c| {
+        in_use(c as u32)
+    });
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     // (cluster, contiguous length in bytes or 0 = follow FAT, path, deleted)
@@ -481,7 +552,9 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             continue;
         }
         let clusters: Vec<u32> = if len > 0 {
-            (dir..dir.saturating_add(len.div_ceil(cs) as u32)).filter(|c| valid(*c)).collect()
+            (dir..dir.saturating_add(len.div_ceil(cs) as u32))
+                .filter(|c| valid(*c))
+                .collect()
         } else {
             chain(dir)
         };
@@ -515,7 +588,11 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             let mut name_u: Vec<u16> = Vec::new();
             for n in &ents[i + 2..=i + secondary] {
                 if n[0] & 0x7F == 0x41 {
-                    name_u.extend(n[2..32].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])));
+                    name_u.extend(
+                        n[2..32]
+                            .chunks_exact(2)
+                            .map(|c| u16::from_le_bytes([c[0], c[1]])),
+                    );
                 }
             }
             name_u.truncate(name_len);
@@ -523,7 +600,12 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             i += secondary + 1;
             if is_dir {
                 if valid(first) {
-                    stack.push((first, if contiguous || deleted { size } else { 0 }, format!("{path}/"), deleted || dir_deleted));
+                    stack.push((
+                        first,
+                        if contiguous || deleted { size } else { 0 },
+                        format!("{path}/"),
+                        deleted || dir_deleted,
+                    ));
                 }
                 continue;
             }
@@ -532,13 +614,21 @@ fn exfat(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             }
             let n = size.div_ceil(cs) as usize;
             let (clusters, note) = if contiguous {
-                ((first..first + n as u32).filter(|c| valid(*c)).collect::<Vec<_>>(), None)
+                (
+                    (first..first + n as u32)
+                        .filter(|c| valid(*c))
+                        .collect::<Vec<_>>(),
+                    None,
+                )
             } else {
                 let c = chain(first);
                 if c.len() >= n {
                     (c[..n].to_vec(), None)
                 } else {
-                    ((first..first + n as u32).filter(|c| valid(*c)).collect(), Some("assumed contiguous"))
+                    (
+                        (first..first + n as u32).filter(|c| valid(*c)).collect(),
+                        Some("assumed contiguous"),
+                    )
                 }
             };
             let used = clusters.iter().filter(|c| in_use(**c)).count();
@@ -658,7 +748,11 @@ impl NtfsRecord {
             }
             let rank = if ns == 2 { 3 } else { ns };
             if best.as_ref().is_none_or(|(r, _, _)| rank < *r) {
-                best = Some((rank, u64le(c, 0) & 0x0000_FFFF_FFFF_FFFF, utf16(&c[66..66 + 2 * n])));
+                best = Some((
+                    rank,
+                    u64le(c, 0) & 0x0000_FFFF_FFFF_FFFF,
+                    utf16(&c[66..66 + 2 * n]),
+                ));
             }
         }
         best.map(|(_, p, n)| (p, n))
@@ -671,7 +765,11 @@ impl NtfsRecord {
 
 fn ntfs_record(rec: &[u8]) -> NtfsRecord {
     let flags = u16le(rec, 22);
-    let mut r = NtfsRecord { in_use: flags & 1 != 0, is_dir: flags & 2 != 0, attrs: Vec::new() };
+    let mut r = NtfsRecord {
+        in_use: flags & 1 != 0,
+        is_dir: flags & 2 != 0,
+        attrs: Vec::new(),
+    };
     let mut off = u16le(rec, 20) as usize;
     while off + 16 <= rec.len() {
         let t = u32le(rec, off);
@@ -682,7 +780,14 @@ fn ntfs_record(rec: &[u8]) -> NtfsRecord {
         let a = &rec[off..off + len];
         let nonres = a[8] != 0;
         let named = a[9] != 0;
-        let mut attr = NtfsAttr { type_: t, named, vcn: 0, size: 0, resident: None, runs: None };
+        let mut attr = NtfsAttr {
+            type_: t,
+            named,
+            vcn: 0,
+            size: 0,
+            resident: None,
+            runs: None,
+        };
         if nonres {
             attr.vcn = u64le(a, 16);
             attr.size = u64le(a, 48);
@@ -728,7 +833,13 @@ fn attr_list_entries(b: &[u8]) -> Vec<AttrRef> {
 }
 
 /// Read the clusters of a decoded runlist into a buffer of at most `size` bytes.
-fn read_runs(src: &dyn Source, runs: &[(Option<i64>, u64)], size: u64, lcn_off: &dyn Fn(i64) -> u64, cs: u64) -> Vec<u8> {
+fn read_runs(
+    src: &dyn Source,
+    runs: &[(Option<i64>, u64)],
+    size: u64,
+    lcn_off: &dyn Fn(i64) -> u64,
+    cs: u64,
+) -> Vec<u8> {
     let mut v = Vec::new();
     for (l, c) in runs {
         match l {
@@ -742,8 +853,16 @@ fn read_runs(src: &dyn Source, runs: &[(Option<i64>, u64)], size: u64, lcn_off: 
 
 /// `$ATTRIBUTE_LIST` entries of a record, reading the list from disk when it is
 /// itself non-resident.
-fn record_attr_list(recs: &HashMap<u64, NtfsRecord>, i: u64, src: &dyn Source, lcn_off: &dyn Fn(i64) -> u64, cs: u64) -> Vec<AttrRef> {
-    let Some(r) = recs.get(&i) else { return Vec::new() };
+fn record_attr_list(
+    recs: &HashMap<u64, NtfsRecord>,
+    i: u64,
+    src: &dyn Source,
+    lcn_off: &dyn Fn(i64) -> u64,
+    cs: u64,
+) -> Vec<AttrRef> {
+    let Some(r) = recs.get(&i) else {
+        return Vec::new();
+    };
     let mut v = Vec::new();
     for a in &r.attrs {
         if a.type_ != 0x20 {
@@ -772,7 +891,13 @@ enum Resolved {
 /// Every extent's runlist is decoded on its own: each one starts with an
 /// absolute LCN (the first mapping-pair offset is relative to 0), so no
 /// correction between extents is needed.
-fn resolve_attr(recs: &HashMap<u64, NtfsRecord>, list: &[AttrRef], base: u64, type_: u32, unnamed: bool) -> Option<Resolved> {
+fn resolve_attr(
+    recs: &HashMap<u64, NtfsRecord>,
+    list: &[AttrRef],
+    base: u64,
+    type_: u32,
+    unnamed: bool,
+) -> Option<Resolved> {
     let mut segs: Vec<(u64, NtfsAttr)> = Vec::new();
     let mut collect = |rec: Option<&NtfsRecord>| {
         if let Some(r) = rec {
@@ -895,7 +1020,12 @@ fn index_alloc_entries(data: &[u8], block: usize) -> Vec<(u64, u64, String)> {
 /// Map every deleted MFT record to the name the directory index still holds
 /// for it (the Linux ntfs3 driver removes `$FILE_NAME` from the record but the
 /// stale index entry can survive in the index buffer slack).
-fn index_name_map(recs: &HashMap<u64, NtfsRecord>, src: &dyn Source, lcn_off: &dyn Fn(i64) -> u64, cs: u64) -> HashMap<u64, (u64, String)> {
+fn index_name_map(
+    recs: &HashMap<u64, NtfsRecord>,
+    src: &dyn Source,
+    lcn_off: &dyn Fn(i64) -> u64,
+    cs: u64,
+) -> HashMap<u64, (u64, String)> {
     let mut out = HashMap::new();
     for i in recs.keys() {
         if !r_is_dir(recs, *i) {
@@ -928,7 +1058,11 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
     let cs = bps * b[13] as u64;
     let mft_lcn = u64le(&b, 48);
     let cpr = b[64] as i8;
-    let rs = if cpr > 0 { cs * cpr as u64 } else { 1u64 << (-cpr as u32) };
+    let rs = if cpr > 0 {
+        cs * cpr as u64
+    } else {
+        1u64 << (-cpr as u32)
+    };
     if cs == 0 || rs == 0 || rs > 65536 {
         return Err(io::Error::other("bad NTFS boot sector"));
     }
@@ -981,12 +1115,22 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             None => Vec::new(),
         }
     };
-    let allocated = |c: u64| bitmap.get((c / 8) as usize).is_some_and(|b| b & (1 << (c % 8)) != 0);
+    let allocated = |c: u64| {
+        bitmap
+            .get((c / 8) as usize)
+            .is_some_and(|b| b & (1 << (c % 8)) != 0)
+    };
     let map = vol_map(vol, "NTFS", 0, cs, 0, vol.size / cs, allocated);
     // Names the directory index still holds for records whose $FILE_NAME is
     // gone (ntfs3). Only computed when a deleted file actually needs it.
-    let need_names = recs.iter().any(|(i, r)| *i >= 24 && !r.in_use && !r.is_dir && r.has_data() && r.name().is_none());
-    let index_names = if need_names { index_name_map(&recs, src, &lcn_off, cs) } else { HashMap::new() };
+    let need_names = recs
+        .iter()
+        .any(|(i, r)| *i >= 24 && !r.in_use && !r.is_dir && r.has_data() && r.name().is_none());
+    let index_names = if need_names {
+        index_name_map(&recs, src, &lcn_off, cs)
+    } else {
+        HashMap::new()
+    };
     let path_of = |mut parent: u64, name: &str| {
         let mut parts = vec![name.to_string()];
         for _ in 0..64 {
@@ -1013,10 +1157,14 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             continue;
         }
         let list = record_attr_list(&recs, *i, src, &lcn_off, cs);
-        let Some(data) = resolve_attr(&recs, &list, *i, 0x80, true) else { continue };
-        let name = r
-            .name()
-            .or_else(|| list.iter().filter(|e| e.type_ == 0x30).find_map(|e| recs.get(&e.record).and_then(|x| x.name())));
+        let Some(data) = resolve_attr(&recs, &list, *i, 0x80, true) else {
+            continue;
+        };
+        let name = r.name().or_else(|| {
+            list.iter()
+                .filter(|e| e.type_ == 0x30)
+                .find_map(|e| recs.get(&e.record).and_then(|x| x.name()))
+        });
         let path = match name {
             Some((parent, name)) => path_of(parent, &name),
             None => match index_names.get(i) {
@@ -1035,7 +1183,11 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
             },
         };
         let (data, size, st) = match data {
-            Resolved::Resident(bytes) => (Data::Resident(bytes.clone()), bytes.len() as u64, State::Intact),
+            Resolved::Resident(bytes) => (
+                Data::Resident(bytes.clone()),
+                bytes.len() as u64,
+                State::Intact,
+            ),
             Resolved::Runs(runs, size) => {
                 let mut ext = Vec::new();
                 let (mut total, mut used) = (0usize, 0usize);
@@ -1060,7 +1212,14 @@ fn ntfs(src: &dyn Source, vol: &Volume) -> io::Result<(Vec<Deleted>, VolMap)> {
                 (Data::Extents(ext), size, state(used, total.max(1)))
             }
         };
-        out.push(Deleted { volume: format!("{} (NTFS)", vol.label), path, size, state: st, data, note: None });
+        out.push(Deleted {
+            volume: format!("{} (NTFS)", vol.label),
+            path,
+            size,
+            state: st,
+            data,
+            note: None,
+        });
     }
     Ok((out, map))
 }
@@ -1084,7 +1243,11 @@ pub fn guess_ext(head: &[u8]) -> &'static str {
         "gz"
     } else if head.len() >= 8 && &head[4..8] == b"ftyp" {
         "mp4"
-    } else if !head.is_empty() && head.iter().all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace()) {
+    } else if !head.is_empty()
+        && head
+            .iter()
+            .all(|b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+    {
         "txt"
     } else {
         "bin"
@@ -1110,7 +1273,10 @@ pub struct Scan {
 }
 
 pub fn scan(src: &dyn Source) -> Scan {
-    let mut s = Scan { volumes: volumes(src), ..Default::default() };
+    let mut s = Scan {
+        volumes: volumes(src),
+        ..Default::default()
+    };
     for v in s.volumes.clone() {
         let r = match v.fs {
             "FAT32" => fat32(src, &v),
@@ -1167,7 +1333,13 @@ pub fn glob(pattern: &str, path: &str) -> bool {
     }
     let p: Vec<char> = pattern.to_lowercase().chars().collect();
     let full: Vec<char> = path.to_lowercase().chars().collect();
-    let name: Vec<char> = path.rsplit('/').next().unwrap_or(path).to_lowercase().chars().collect();
+    let name: Vec<char> = path
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_lowercase()
+        .chars()
+        .collect();
     m(&p, &full) || m(&p, &name)
 }
 
@@ -1185,8 +1357,14 @@ fn free_path(dir: &std::path::Path, rel: &str) -> std::path::PathBuf {
     if !p.exists() {
         return p;
     }
-    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = p
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
     for n in 1.. {
         let q = p.with_file_name(format!("{stem} ({n}){ext}"));
         if !q.exists() {
@@ -1197,19 +1375,28 @@ fn free_path(dir: &std::path::Path, rel: &str) -> std::path::PathBuf {
 }
 
 /// Write `files` into `dir` (folders kept). Returns (written path, bytes).
-pub fn recover_to(src: &dyn Source, files: &[&Deleted], dir: &std::path::Path) -> Vec<Result<(String, u64), String>> {
+pub fn recover_to(
+    src: &dyn Source,
+    files: &[&Deleted],
+    dir: &std::path::Path,
+) -> Vec<Result<(String, u64), String>> {
     files
         .iter()
         .map(|f| {
             let rel = if f.volume.starts_with("whole device") {
                 f.path.clone()
             } else {
-                format!("{}/{}", f.volume.split(' ').take(2).collect::<Vec<_>>().join("-"), f.path)
+                format!(
+                    "{}/{}",
+                    f.volume.split(' ').take(2).collect::<Vec<_>>().join("-"),
+                    f.path
+                )
             };
             let dest = free_path(dir, &rel);
             let bytes = contents(src, f).map_err(|e| format!("{}: {e}", f.path))?;
             if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
             }
             std::fs::write(&dest, &bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
             Ok((dest.to_string_lossy().into_owned(), bytes.len() as u64))
@@ -1219,14 +1406,30 @@ pub fn recover_to(src: &dyn Source, files: &[&Deleted], dir: &std::path::Path) -
 
 /// Demo scan (no disk): an NTFS volume with deleted files in every state.
 pub fn demo_scan(size: u64) -> Scan {
-    let vol = Volume { label: "partition 1".into(), fs: "NTFS", base: 1 << 20, size: size.saturating_sub(1 << 20) };
+    let vol = Volume {
+        label: "partition 1".into(),
+        fs: "NTFS",
+        base: 1 << 20,
+        size: size.saturating_sub(1 << 20),
+    };
     let used = (0..MAP_CELLS)
         .map(|i| {
             let h = (i * 37 + 11) % 100;
-            if i < 40 || (i < 700 && h < 70) { 1.0 } else if h < 12 { 0.5 } else { 0.0 }
+            if i < 40 || (i < 700 && h < 70) {
+                1.0
+            } else if h < 12 {
+                0.5
+            } else {
+                0.0
+            }
         })
         .collect();
-    let at = |cell: u64, len: u64| Data::Extents(vec![(Some(vol.base + vol.size / MAP_CELLS as u64 * cell), len)]);
+    let at = |cell: u64, len: u64| {
+        Data::Extents(vec![(
+            Some(vol.base + vol.size / MAP_CELLS as u64 * cell),
+            len,
+        )])
+    };
     let file = |path: &str, size: u64, state: State, data: Data| Deleted {
         volume: format!("{} (NTFS)", vol.label),
         path: path.into(),
@@ -1239,22 +1442,59 @@ pub fn demo_scan(size: u64) -> Scan {
     Scan {
         volumes: vec![vol.clone()],
         files: vec![
-            file("Dokumen Kantor/Laporan Keuangan 2026.xlsx", 482_304, State::Intact, at(712, 482_304)),
-            file("Dokumen Kantor/Kontrak Vendor.pdf", 2_310_144, State::Intact, at(750, span * 6)),
-            file("Foto/IMG_2031.jpg", 3_145_728, State::PartlyReused, at(640, span * 9)),
-            file("Foto/IMG_2032.jpg", 2_883_584, State::Overwritten, at(300, span * 4)),
-            file("catatan.txt", 612, State::Intact, Data::Resident(b"demo".to_vec())),
-            file("backup/db-2026-09-20.sql", 48_234_496, State::Intact, at(820, span * 30)),
+            file(
+                "Dokumen Kantor/Laporan Keuangan 2026.xlsx",
+                482_304,
+                State::Intact,
+                at(712, 482_304),
+            ),
+            file(
+                "Dokumen Kantor/Kontrak Vendor.pdf",
+                2_310_144,
+                State::Intact,
+                at(750, span * 6),
+            ),
+            file(
+                "Foto/IMG_2031.jpg",
+                3_145_728,
+                State::PartlyReused,
+                at(640, span * 9),
+            ),
+            file(
+                "Foto/IMG_2032.jpg",
+                2_883_584,
+                State::Overwritten,
+                at(300, span * 4),
+            ),
+            file(
+                "catatan.txt",
+                612,
+                State::Intact,
+                Data::Resident(b"demo".to_vec()),
+            ),
+            file(
+                "backup/db-2026-09-20.sql",
+                48_234_496,
+                State::Intact,
+                at(820, span * 30),
+            ),
         ],
         carve_only: Vec::new(),
         errors: Vec::new(),
-        maps: vec![VolMap { volume: format!("{} (NTFS)", vol.label), base: vol.base, size: vol.size, used }],
+        maps: vec![VolMap {
+            volume: format!("{} (NTFS)", vol.label),
+            base: vol.base,
+            size: vol.size,
+            used,
+        }],
     }
 }
 
 /// Map cells (of `cells`) a file's data occupies in its volume map.
 pub fn file_cells(f: &Deleted, m: &VolMap, cells: usize) -> Vec<usize> {
-    let Data::Extents(ext) = &f.data else { return Vec::new() };
+    let Data::Extents(ext) = &f.data else {
+        return Vec::new();
+    };
     let mut v = Vec::new();
     for (off, len) in ext {
         let Some(o) = off else { continue };
@@ -1262,7 +1502,8 @@ pub fn file_cells(f: &Deleted, m: &VolMap, cells: usize) -> Vec<usize> {
             continue;
         }
         let a = ((*o - m.base) as u128 * cells as u128 / m.size.max(1) as u128) as usize;
-        let b = (((*o - m.base + len.saturating_sub(1)) as u128 * cells as u128) / m.size.max(1) as u128) as usize;
+        let b = (((*o - m.base + len.saturating_sub(1)) as u128 * cells as u128)
+            / m.size.max(1) as u128) as usize;
         v.extend(a.min(cells - 1)..=b.min(cells - 1));
     }
     v.sort_unstable();
@@ -1329,7 +1570,11 @@ fn is_header(s: &[u8]) -> bool {
 /// Group cluster indices `0..count` into byte ranges wherever `free` holds;
 /// `off(c)` is the byte offset of cluster `c` (the end of a run is `off(c)` of
 /// the first free cluster after it, so the ranges are contiguous).
-fn cluster_runs(count: u64, free: impl Fn(u64) -> bool, off: impl Fn(u64) -> u64) -> Vec<(u64, u64)> {
+fn cluster_runs(
+    count: u64,
+    free: impl Fn(u64) -> bool,
+    off: impl Fn(u64) -> u64,
+) -> Vec<(u64, u64)> {
     let mut v = Vec::new();
     let mut c = 0u64;
     while c < count {
@@ -1369,12 +1614,22 @@ fn fat32_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
         return Err(io::Error::other("bad FAT32 boot sector"));
     }
     let raw = read(src, vol.base + reserved * bps, (fatsz * bps) as usize)?;
-    let fat: Vec<u32> = raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let fat: Vec<u32> = raw
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
     let cs = bps * spc;
     let data = (reserved + nfats * fatsz) * bps;
     let count = (vol.size.saturating_sub(data) / cs).min(fat.len() as u64 - 2);
     let off = |c: u64| vol.base + data + c * cs;
-    Ok(cluster_runs(count, |c| fat.get((c + 2) as usize).is_some_and(|v| v & 0x0FFF_FFFF == 0), off))
+    Ok(cluster_runs(
+        count,
+        |c| {
+            fat.get((c + 2) as usize)
+                .is_some_and(|v| v & 0x0FFF_FFFF == 0)
+        },
+        off,
+    ))
 }
 
 fn exfat_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
@@ -1389,7 +1644,10 @@ fn exfat_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
         return Err(io::Error::other("bad exFAT boot sector"));
     }
     let fat_raw = read(src, vol.base + fat_off, (count as usize + 2) * 4)?;
-    let fat: Vec<u32> = fat_raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let fat: Vec<u32> = fat_raw
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect();
     let off = |c: u32| vol.base + heap + (c as u64 - 2) * cs;
     let valid = |c: u32| c >= 2 && c < count + 2;
     let chain = |mut c: u32| {
@@ -1421,7 +1679,11 @@ fn exfat_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
             break;
         }
     }
-    let in_use = |c: u64| bitmap.get((c / 8) as usize).is_some_and(|b| b & (1 << (c % 8)) != 0);
+    let in_use = |c: u64| {
+        bitmap
+            .get((c / 8) as usize)
+            .is_some_and(|b| b & (1 << (c % 8)) != 0)
+    };
     let off2 = |c: u64| vol.base + heap + c * cs;
     Ok(cluster_runs(count as u64, |c| !in_use(c), off2))
 }
@@ -1431,7 +1693,11 @@ fn ntfs_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
     let cs = (u16le(&b, 11) as u64) * b[13] as u64;
     let mft_lcn = u64le(&b, 48);
     let cpr = b[64] as i8;
-    let rs = if cpr > 0 { cs * cpr as u64 } else { 1u64 << (-cpr as u32) };
+    let rs = if cpr > 0 {
+        cs * cpr as u64
+    } else {
+        1u64 << (-cpr as u32)
+    };
     if cs == 0 || rs == 0 || rs > 65536 {
         return Err(io::Error::other("bad NTFS boot sector"));
     }
@@ -1474,16 +1740,28 @@ fn ntfs_free(src: &dyn Source, vol: &Volume) -> io::Result<Vec<(u64, u64)>> {
         .and_then(|a| a.runs.as_deref())
         .map(ntfs_runs)
         .ok_or_else(|| io::Error::other("no $Bitmap data runs"))?;
-    let bitmap_bytes = attr6.map(|a| a.size).filter(|s| *s > 0).unwrap_or_else(|| runs.iter().map(|(_, c)| c * cs).sum());
+    let bitmap_bytes = attr6
+        .map(|a| a.size)
+        .filter(|s| *s > 0)
+        .unwrap_or_else(|| runs.iter().map(|(_, c)| c * cs).sum());
     let bitmap = read_runs(src, &runs, bitmap_bytes, &lcn_off, cs);
-    let allocated = |c: u64| bitmap.get((c / 8) as usize).is_some_and(|b| b & (1 << (c % 8)) != 0);
+    let allocated = |c: u64| {
+        bitmap
+            .get((c / 8) as usize)
+            .is_some_and(|b| b & (1 << (c % 8)) != 0)
+    };
     let count = vol.size / cs;
     let off = |c: u64| vol.base + c * cs;
     Ok(cluster_runs(count, |c| !allocated(c), off))
 }
 
 /// Search 512-byte-aligned file headers from `start` to `end` of the source.
-pub fn carve(src: &dyn Source, start: u64, end: u64, progress: &mut dyn FnMut(u64, u64)) -> Vec<Carved> {
+pub fn carve(
+    src: &dyn Source,
+    start: u64,
+    end: u64,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Vec<Carved> {
     let mut out = Vec::new();
     let chunk = 4u64 << 20;
     let mut off = start - start % 512;
@@ -1500,7 +1778,11 @@ pub fn carve(src: &dyn Source, start: u64, end: u64, progress: &mut dyn FnMut(u6
                 let len = (MAX_CARVE).min(src.len() - at) as usize;
                 if let Ok(head) = read(src, at, len) {
                     if let Some((l, ext)) = carve_end(&head) {
-                        out.push(Carved { offset: at, len: l, ext });
+                        out.push(Carved {
+                            offset: at,
+                            len: l,
+                            ext,
+                        });
                         // Skip past the file (whole sectors).
                         let skip = (l.div_ceil(512) * 512) as usize;
                         if k + skip <= buf.len() {
@@ -1536,7 +1818,8 @@ pub fn check_destination(source: &str, dest: &std::path::Path) -> Result<(), Str
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let src_disk = crate::recover::disk_name(&src_name);
-    let dest_dev = crate::recover::mount_source(dest).ok_or("cannot tell which disk the destination is on")?;
+    let dest_dev =
+        crate::recover::mount_source(dest).ok_or("cannot tell which disk the destination is on")?;
     let dest_disk = crate::recover::disk_name(dest_dev.trim_start_matches("/dev/"));
     if dest_disk == src_disk {
         return Err(format!(
@@ -1568,7 +1851,8 @@ pub fn cmd(args: &[String]) -> i32 {
                  JPEG, PNG, PDF and ZIP / Office files (names are lost); needs --to\n  \
                  --free                 with --carve: only search the free clusters of NTFS /\n                         \
                  FAT32 / exFAT (skip live files); other filesystems are carved whole";
-    let (mut src, mut to, mut pat, mut all, mut carve_mode, mut free) = (None, None, None, false, false, false);
+    let (mut src, mut to, mut pat, mut all, mut carve_mode, mut free) =
+        (None, None, None, false, false, false);
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1642,7 +1926,9 @@ pub fn cmd(args: &[String]) -> i32 {
     }
     let Some(dir) = to else {
         if !s.files.is_empty() {
-            println!("\n  Recover with: dcheck undelete {src_path} --to /path/on/another/disk [--match '*.docx']");
+            println!(
+                "\n  Recover with: dcheck undelete {src_path} --to /path/on/another/disk [--match '*.docx']"
+            );
         }
         return 0;
     };
@@ -1653,7 +1939,14 @@ pub fn cmd(args: &[String]) -> i32 {
         .filter(|f| all || f.state != State::Overwritten)
         .collect();
     if chosen.is_empty() {
-        println!("\n  Nothing to recover{}.", if pat.is_some() { " matching the pattern" } else { "" });
+        println!(
+            "\n  Nothing to recover{}.",
+            if pat.is_some() {
+                " matching the pattern"
+            } else {
+                ""
+            }
+        );
         return 1;
     }
     println!();
@@ -1667,22 +1960,29 @@ pub fn cmd(args: &[String]) -> i32 {
             Err(e) => println!("  failed     {e}"),
         }
     }
-    println!("\n  {ok} of {} file(s) written to {dir}. Open them to check: a PARTLY REUSED file may be damaged.", chosen.len());
-    if ok == chosen.len() {
-        0
-    } else {
-        1
-    }
+    println!(
+        "\n  {ok} of {} file(s) written to {dir}. Open them to check: a PARTLY REUSED file may be damaged.",
+        chosen.len()
+    );
+    if ok == chosen.len() { 0 } else { 1 }
 }
 
 /// The scan as a text report.
 pub fn scan_lines(s: &Scan) -> Vec<String> {
     let mut out = vec![crate::report::section("DELETED FILES")];
     for v in &s.volumes {
-        out.push(format!("  Volume       : {} — {}, {}", v.label, v.fs, human_size_bin(v.size)));
+        out.push(format!(
+            "  Volume       : {} — {}, {}",
+            v.label,
+            v.fs,
+            human_size_bin(v.size)
+        ));
     }
     if s.volumes.is_empty() {
-        out.push("  No filesystem found (no NTFS / FAT32 / exFAT / ext4 / XFS / btrfs signature).".into());
+        out.push(
+            "  No filesystem found (no NTFS / FAT32 / exFAT / ext4 / XFS / btrfs signature)."
+                .into(),
+        );
     }
     for e in &s.errors {
         out.push(format!("  Error        : {e}"));
@@ -1697,11 +1997,19 @@ pub fn scan_lines(s: &Scan) -> Vec<String> {
         out.push(format!("  {:<14} {:>10}  PATH", "STATE", "SIZE"));
         for f in &s.files {
             let note = f.note.map(|n| format!("  ({n})")).unwrap_or_default();
-            out.push(format!("  {:<14} {:>10}  {}{note}", f.state.label(), human_size_bin(f.size), f.path));
+            out.push(format!(
+                "  {:<14} {:>10}  {}{note}",
+                f.state.label(),
+                human_size_bin(f.size),
+                f.path
+            ));
         }
         let intact = s.files.iter().filter(|f| f.state == State::Intact).count();
         out.push(String::new());
-        out.push(format!("  {} deleted file(s), {intact} intact.", s.files.len()));
+        out.push(format!(
+            "  {} deleted file(s), {intact} intact.",
+            s.files.len()
+        ));
     } else if !s.volumes.is_empty() && s.carve_only.len() < s.volumes.len() {
         out.push("  No deleted files found in the directory tables.".into());
     }
@@ -1752,12 +2060,20 @@ fn carve_cmd(src: &dyn Source, dir: &std::path::Path, free: bool) -> i32 {
         }) {
             Ok(()) => {
                 n += 1;
-                println!("  carved  {}  ({}, at {})", dest.display(), human_size_bin(c.len), human_size_bin(c.offset));
+                println!(
+                    "  carved  {}  ({}, at {})",
+                    dest.display(),
+                    human_size_bin(c.len),
+                    human_size_bin(c.offset)
+                );
             }
             Err(e) => println!("  failed  {}: {e}", dest.display()),
         }
     }
-    println!("\n  {n} file(s) carved into {}. Names are lost; live files are found too.", dir.display());
+    println!(
+        "\n  {n} file(s) carved into {}. Names are lost; live files are found too.",
+        dir.display()
+    );
     0
 }
 
@@ -1768,19 +2084,35 @@ mod tests {
     /// Load a `testdata/undelete/*.sparse` image (made on a real system:
     /// mkfs, write files, delete some, write another one).
     fn fixture(name: &str) -> Vec<u8> {
-        let text = std::fs::read_to_string(format!("{}/testdata/undelete/{name}.sparse", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let text = std::fs::read_to_string(format!(
+            "{}/testdata/undelete/{name}.sparse",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
         let mut lines = text.lines();
-        let size: usize = lines.next().unwrap().rsplit(' ').next().unwrap().parse().unwrap();
+        let size: usize = lines
+            .next()
+            .unwrap()
+            .rsplit(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         let mut img = vec![0u8; size];
         for l in lines {
             let p: Vec<&str> = l.split(' ').collect();
             let s: usize = p[0].parse().unwrap();
             if p[1] == "H" {
-                for (k, byte) in (0..p[2].len()).step_by(2).map(|i| u8::from_str_radix(&p[2][i..i + 2], 16).unwrap()).enumerate() {
+                for (k, byte) in (0..p[2].len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&p[2][i..i + 2], 16).unwrap())
+                    .enumerate()
+                {
                     img[s * 512 + k] = byte;
                 }
             } else {
-                let (count, b): (usize, u8) = (p[1].parse().unwrap(), u8::from_str_radix(p[3], 16).unwrap());
+                let (count, b): (usize, u8) =
+                    (p[1].parse().unwrap(), u8::from_str_radix(p[3], 16).unwrap());
                 img[s * 512..(s + count) * 512].fill(b);
             }
         }
@@ -1801,7 +2133,17 @@ mod tests {
         let img = fixture(name);
         let s = scan(&img);
         assert!(s.errors.is_empty(), "{:?}", s.errors);
-        let by = |p: &str| s.files.iter().find(|f| f.path == p).unwrap_or_else(|| panic!("{name}: {p} not found in {:#?}", s.files.iter().map(|f| (&f.path, f.state)).collect::<Vec<_>>()));
+        let by = |p: &str| {
+            s.files.iter().find(|f| f.path == p).unwrap_or_else(|| {
+                panic!(
+                    "{name}: {p} not found in {:#?}",
+                    s.files
+                        .iter()
+                        .map(|f| (&f.path, f.state))
+                        .collect::<Vec<_>>()
+                )
+            })
+        };
         let b = by("big.bin");
         assert_eq!(b.size, 20000);
         if b.state == State::Intact {
@@ -1813,7 +2155,11 @@ mod tests {
             assert_eq!(contents(&img, x).unwrap(), xlsx(), "{name}: xlsx");
         }
         // Live files are never listed.
-        assert!(s.files.iter().all(|f| !f.path.ends_with("keep.txt") && !f.path.ends_with("after.txt")));
+        assert!(
+            s.files
+                .iter()
+                .all(|f| !f.path.ends_with("keep.txt") && !f.path.ends_with("after.txt"))
+        );
         s
     }
 
@@ -1857,15 +2203,29 @@ mod tests {
         let s = scan(&img);
         assert!(s.errors.is_empty(), "{:?}", s.errors);
         let names: Vec<&str> = s.files.iter().map(|f| f.path.as_str()).collect();
-        assert!(names.iter().all(|n| n.starts_with("$NoName/record-")), "{names:?}");
-        let b = s.files.iter().find(|f| f.size == 20000).expect("big.bin by size");
+        assert!(
+            names.iter().all(|n| n.starts_with("$NoName/record-")),
+            "{names:?}"
+        );
+        let b = s
+            .files
+            .iter()
+            .find(|f| f.size == 20000)
+            .expect("big.bin by size");
         assert!(b.path.ends_with(".bin"), "{}", b.path);
         if b.state == State::Intact {
             assert_eq!(contents(&img, b).unwrap(), big());
         }
-        let x = s.files.iter().find(|f| f.size == 6004).expect("xlsx by size");
+        let x = s
+            .files
+            .iter()
+            .find(|f| f.size == 6004)
+            .expect("xlsx by size");
         assert!(x.path.ends_with(".zip"), "{}", x.path);
-        assert!(s.files.iter().any(|f| f.path.ends_with(".txt")), "{names:?}");
+        assert!(
+            s.files.iter().any(|f| f.path.ends_with(".txt")),
+            "{names:?}"
+        );
     }
 
     #[test]
@@ -1883,7 +2243,10 @@ mod tests {
         // 0x21: 1-byte length, 2-byte offset: 0x18 clusters at LCN 0x5634;
         // then 0x11: 1/1 with a negative offset (-2).
         let runs = ntfs_runs(&[0x21, 0x18, 0x34, 0x56, 0x11, 0x04, 0xFE, 0x01, 0x03, 0x00]);
-        assert_eq!(runs, vec![(Some(0x5634), 0x18), (Some(0x5632), 4), (None, 3)]);
+        assert_eq!(
+            runs,
+            vec![(Some(0x5634), 0x18), (Some(0x5632), 4), (None, 3)]
+        );
         let mut rec = vec![0u8; 1024];
         rec[..4].copy_from_slice(b"FILE");
         rec[4] = 48;
@@ -1926,13 +2289,30 @@ mod tests {
         let pdf = b"%PDF-1.4\nhello\n%%EOF\n";
         img[2048..2048 + pdf.len()].copy_from_slice(pdf);
         let found = carve(&img, 0, img.len() as u64, &mut |_, _| {});
-        assert_eq!(found, vec![Carved { offset: 512, len: 9, ext: "jpg" }, Carved { offset: 2048, len: pdf.len() as u64, ext: "pdf" }]);
+        assert_eq!(
+            found,
+            vec![
+                Carved {
+                    offset: 512,
+                    len: 9,
+                    ext: "jpg"
+                },
+                Carved {
+                    offset: 2048,
+                    len: pdf.len() as u64,
+                    ext: "pdf"
+                }
+            ]
+        );
     }
 
     #[test]
     fn globs_and_safe_paths() {
         assert!(glob("*.xlsx", "Dokumen Kantor/Laporan Keuangan 2026.xlsx"));
-        assert!(glob("laporan*", "Dokumen Kantor/Laporan Keuangan 2026.xlsx"));
+        assert!(glob(
+            "laporan*",
+            "Dokumen Kantor/Laporan Keuangan 2026.xlsx"
+        ));
         assert!(glob("dokumen*/*", "Dokumen Kantor/x.txt"));
         assert!(!glob("*.pdf", "a.xlsx"));
         let dir = std::env::temp_dir().join(format!("dcheck-undelete-test-{}", std::process::id()));
@@ -2006,18 +2386,51 @@ mod tests {
         let list: Vec<u8> = [list_entry(0x80, 1, 41, 0), list_entry(0x80, 2, 42, 2)].concat();
         let base = record(0, &[attr_resident(0x20, 0, false, &list)]);
         // LCN 100, 2 clusters (len 1 byte, offset 1 byte).
-        let ext1 = record(0, &[attr_nonresident(0x80, 1, 0, 3 * 4096, &[0x11, 2, 100, 0x00])]);
+        let ext1 = record(
+            0,
+            &[attr_nonresident(
+                0x80,
+                1,
+                0,
+                3 * 4096,
+                &[0x11, 2, 100, 0x00],
+            )],
+        );
         // LCN 500, 1 cluster: absolute, not relative to the previous extent.
-        let ext2 = record(0, &[attr_nonresident(0x80, 2, 2, 0, &[0x21, 1, 0xF4, 0x01, 0x00])]);
+        let ext2 = record(
+            0,
+            &[attr_nonresident(
+                0x80,
+                2,
+                2,
+                0,
+                &[0x21, 1, 0xF4, 0x01, 0x00],
+            )],
+        );
         let mut recs = HashMap::new();
         recs.insert(40u64, ntfs_record(&base));
         recs.insert(41u64, ntfs_record(&ext1));
         recs.insert(42u64, ntfs_record(&ext2));
         let parsed = attr_list_entries(&recs[&40].attrs[0].resident.clone().unwrap());
-        assert_eq!(parsed, vec![
-            AttrRef { type_: 0x80, id: 1, named: false, record: 41, vcn: 0 },
-            AttrRef { type_: 0x80, id: 2, named: false, record: 42, vcn: 2 },
-        ]);
+        assert_eq!(
+            parsed,
+            vec![
+                AttrRef {
+                    type_: 0x80,
+                    id: 1,
+                    named: false,
+                    record: 41,
+                    vcn: 0
+                },
+                AttrRef {
+                    type_: 0x80,
+                    id: 2,
+                    named: false,
+                    record: 42,
+                    vcn: 2
+                },
+            ]
+        );
         match resolve_attr(&recs, &parsed, 40, 0x80, true) {
             Some(Resolved::Runs(runs, size)) => {
                 assert_eq!(runs, vec![(Some(100), 2), (Some(500), 1)]);
@@ -2058,7 +2471,10 @@ mod tests {
         root.extend(index_entry(77, 5, "laporan.xlsx"));
         root.extend([0u8; 12]);
         root.extend(2u32.to_le_bytes()); // last entry flag
-        assert_eq!(index_root_entries(&root), vec![(77, 5, "laporan.xlsx".into())]);
+        assert_eq!(
+            index_root_entries(&root),
+            vec![(77, 5, "laporan.xlsx".into())]
+        );
 
         // An INDX block with the update-sequence fixup applied, entries at 0x38.
         let mut block = vec![0u8; 512];
@@ -2072,7 +2488,10 @@ mod tests {
         let last = 0x38 + e.len();
         block[last + 12..last + 16].copy_from_slice(&2u32.to_le_bytes());
         block[510..512].copy_from_slice(&[0xAB, 0xCD]);
-        assert_eq!(index_alloc_entries(&block, 512), vec![(78, 5, "photo.jpg".into())]);
+        assert_eq!(
+            index_alloc_entries(&block, 512),
+            vec![(78, 5, "photo.jpg".into())]
+        );
     }
 
     #[test]
@@ -2086,7 +2505,10 @@ mod tests {
             let mut prev = vols[0].base;
             for (a, b) in &ranges {
                 assert!(a >= &prev && b > a, "{n}: bad range {a}..{b}");
-                assert!(b <= &(vols[0].base + vols[0].size), "{n}: range past volume");
+                assert!(
+                    b <= &(vols[0].base + vols[0].size),
+                    "{n}: range past volume"
+                );
                 prev = *b;
             }
             assert!(ranges.len() > 1, "{n}: allocation should have gaps");
@@ -2113,8 +2535,14 @@ mod tests {
         for (a, b) in &ranges {
             found.extend(carve(&img, *a, *b, &mut |_, _| {}));
         }
-        assert!(found.iter().any(|c| c.offset == free_at), "free jpg not found: {found:?}");
-        assert!(!found.iter().any(|c| c.offset == gap as u64), "allocated jpg was carved");
+        assert!(
+            found.iter().any(|c| c.offset == free_at),
+            "free jpg not found: {found:?}"
+        );
+        assert!(
+            !found.iter().any(|c| c.offset == gap as u64),
+            "allocated jpg was carved"
+        );
         assert!(gap >= vols[0].base);
     }
 

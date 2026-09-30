@@ -122,13 +122,23 @@ const MAKERS: &[Maker] = &[
     Maker {
         name: "Samsung",
         keywords: &["SAMSUNG"],
-        prefixes: &["MZ7", "MZV", "MZQ", "MZ-", "MZI", "MZ1", "MZP", "MZN", "MZW", "MZ9", "HD103", "HD204", "HD502"],
+        prefixes: &[
+            "MZ7", "MZV", "MZQ", "MZ-", "MZI", "MZ1", "MZP", "MZN", "MZW", "MZ9", "HD103", "HD204",
+            "HD502",
+        ],
         pci: &[0x144d],
         own_controllers: true,
     },
     Maker {
         name: "Western Digital",
-        keywords: &["WDC", "WESTERN DIGITAL", "HGST", "HITACHI", "SANDISK", "ULTRASTAR"],
+        keywords: &[
+            "WDC",
+            "WESTERN DIGITAL",
+            "HGST",
+            "HITACHI",
+            "SANDISK",
+            "ULTRASTAR",
+        ],
         prefixes: &["WD", "WUH", "WUS", "HUS", "HUH", "HUA", "HDS", "HTS", "HTE"],
         pci: &[0x15b7, 0x1b96, 0x1c58],
         own_controllers: false,
@@ -143,7 +153,10 @@ const MAKERS: &[Maker] = &[
     Maker {
         name: "Toshiba/Kioxia",
         keywords: &["TOSHIBA", "KIOXIA", "FUJITSU"],
-        prefixes: &["THN", "KXG", "KBG", "KCD", "KCM", "MG0", "MG1", "AL1", "MBF", "MQ0", "DT01", "HDW", "MK"],
+        prefixes: &[
+            "THN", "KXG", "KBG", "KCD", "KCM", "MG0", "MG1", "AL1", "MBF", "MQ0", "DT01", "HDW",
+            "MK",
+        ],
         pci: &[0x1179, 0x1e0f],
         own_controllers: false,
     },
@@ -164,7 +177,9 @@ const MAKERS: &[Maker] = &[
     Maker {
         name: "Kingston",
         keywords: &["KINGSTON"],
-        prefixes: &["SA400", "SV300", "SUV", "SKC", "SNV", "SA2000", "SEDC", "SNS", "SQ500"],
+        prefixes: &[
+            "SA400", "SV300", "SUV", "SKC", "SNV", "SA2000", "SEDC", "SNS", "SQ500",
+        ],
         pci: &[0x2646],
         own_controllers: false,
     },
@@ -197,7 +212,9 @@ fn controller_vendor(vid: u64) -> Option<&'static str> {
 /// Maker an IEEE OUI is registered to (full registry extract, see
 /// `oui_table.rs` / `scripts/gen-dcheck-oui.sh`).
 fn maker_by_oui(oui: &str) -> Option<&'static Maker> {
-    let (_, name) = crate::oui_table::OUI_MAKERS.iter().find(|(o, _)| *o == oui)?;
+    let (_, name) = crate::oui_table::OUI_MAKERS
+        .iter()
+        .find(|(o, _)| *o == oui)?;
     MAKERS.iter().find(|m| m.name == *name)
 }
 
@@ -229,9 +246,10 @@ fn claimed_brand(vendor: &str, model: &str) -> Option<&'static Maker> {
 /// `2.5" SATA SSD`, `Generic`.
 pub fn is_generic_model(model: &str) -> bool {
     const WORDS: &[&str] = &[
-        "SSD", "SATA", "SATAIII", "SATA3", "NVME", "PCIE", "M.2", "M2", "2.5", "2.5\"", "DISK", "DRIVE", "HDD",
-        "FLASH", "GENERIC", "SOLID", "STATE", "INCH", "MSATA", "NGFF", "III", "ATA", "SERIES", "INTERNAL", "USB",
-        "MASS", "STORAGE", "DEVICE", "GEN3", "GEN4", "X4", "HARD", "MEMORY", "MINI", "PORTABLE",
+        "SSD", "SATA", "SATAIII", "SATA3", "NVME", "PCIE", "M.2", "M2", "2.5", "2.5\"", "DISK",
+        "DRIVE", "HDD", "FLASH", "GENERIC", "SOLID", "STATE", "INCH", "MSATA", "NGFF", "III",
+        "ATA", "SERIES", "INTERNAL", "USB", "MASS", "STORAGE", "DEVICE", "GEN3", "GEN4", "X4",
+        "HARD", "MEMORY", "MINI", "PORTABLE",
     ];
     model
         .to_ascii_uppercase()
@@ -239,7 +257,9 @@ pub fn is_generic_model(model: &str) -> bool {
         .filter(|w| !w.is_empty())
         .all(|w| {
             WORDS.contains(&w)
-                || w.trim_end_matches(['G', 'B', 'T', 'M']).chars().all(|c| c.is_ascii_digit() || c == '.')
+                || w.trim_end_matches(['G', 'B', 'T', 'M'])
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.')
         })
 }
 
@@ -261,16 +281,26 @@ pub fn is_placeholder_serial(serial: &str) -> bool {
 /// OUI of a WWN (hex digits after the NAA nibble for NAA 5/6; bytes 0–2 of
 /// an EUI-64), or `None` when the WWN is absent or all zeros.
 fn wwn_oui(wwn: &str, nvme: bool) -> Option<String> {
-    let hex: String = wwn.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>().to_ascii_lowercase();
+    let hex: String = wwn
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase();
     if hex.len() < 7 || hex.chars().all(|c| c == '0') {
         return None;
     }
     // NVMe EUI-64: the OUI is the first 3 bytes; NAA 5/6: after the NAA nibble.
-    Some(if nvme { hex[0..6].to_string() } else { hex[1..7].to_string() })
+    Some(if nvme {
+        hex[0..6].to_string()
+    } else {
+        hex[1..7].to_string()
+    })
 }
 
 fn is_zero_wwn(wwn: &str) -> bool {
-    wwn.chars().filter(|c| c.is_ascii_hexdigit()).all(|c| c == '0')
+    wwn.chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .all(|c| c == '0')
 }
 
 /// What identifies the drive (gathered from sysfs, smartctl and ioctl).
@@ -295,7 +325,13 @@ pub fn assess(e: &Evidence) -> Authenticity {
     let mut signals = Vec::new();
     let brand = claimed_brand(&e.vendor, &e.model);
     let generic = brand.is_none() && is_generic_model(&e.model);
-    let mut out = Authenticity { level: Level::Unknown, brand: brand.map(|m| m.name), maker: None, wwn: e.wwn.clone(), signals: Vec::new() };
+    let mut out = Authenticity {
+        level: Level::Unknown,
+        brand: brand.map(|m| m.name),
+        maker: None,
+        wwn: e.wwn.clone(),
+        signals: Vec::new(),
+    };
     if e.virtual_disk || (e.model.trim().is_empty() && e.wwn.is_none() && e.pci_vendor.is_none()) {
         return out;
     }
@@ -310,31 +346,55 @@ pub fn assess(e: &Evidence) -> Authenticity {
     match (&e.wwn, &oui) {
         (Some(w), None) if is_zero_wwn(w) && !e.nvme => {
             bad += 1;
-            signals.push((Mark::Bad, "WWN is all zeros — no IEEE-registered manufacturer ID".to_string()));
+            signals.push((
+                Mark::Bad,
+                "WWN is all zeros — no IEEE-registered manufacturer ID".to_string(),
+            ));
         }
         (None, _) if e.no_wwn => {
             bad += 1;
-            signals.push((Mark::Bad, "the drive reports no WWN (every SATA drive from a real maker has one)".to_string()));
+            signals.push((
+                Mark::Bad,
+                "the drive reports no WWN (every SATA drive from a real maker has one)".to_string(),
+            ));
         }
         (Some(_), Some(o)) => match (wwn_maker, brand) {
             (Some(m), Some(b)) if m.name == b.name => {
                 good = true;
-                signals.push((Mark::Good, format!("WWN OUI {o} is registered to {}, matching the model", m.name)));
+                signals.push((
+                    Mark::Good,
+                    format!(
+                        "WWN OUI {o} is registered to {}, matching the model",
+                        m.name
+                    ),
+                ));
             }
             (Some(m), Some(b)) => {
                 bad += 1;
                 strong = true;
-                signals.push((Mark::Bad, format!("model says {} but the WWN OUI {o} belongs to {}", b.name, m.name)));
+                signals.push((
+                    Mark::Bad,
+                    format!(
+                        "model says {} but the WWN OUI {o} belongs to {}",
+                        b.name, m.name
+                    ),
+                ));
             }
             (Some(m), None) => {
                 good = true;
-                signals.push((Mark::Good, format!("WWN OUI {o} is registered to {}", m.name)));
+                signals.push((
+                    Mark::Good,
+                    format!("WWN OUI {o} is registered to {}", m.name),
+                ));
             }
             (None, Some(b)) => {
                 bad += 1;
                 signals.push((Mark::Bad, format!("WWN OUI {o} is not one {} uses", b.name)));
             }
-            (None, None) => signals.push((Mark::Info, format!("WWN OUI {o} (maker not in dcheck's table)"))),
+            (None, None) => signals.push((
+                Mark::Info,
+                format!("WWN OUI {o} (maker not in dcheck's table)"),
+            )),
         },
         _ => {}
     }
@@ -344,16 +404,28 @@ pub fn assess(e: &Evidence) -> Authenticity {
     if let Some(vid) = e.pci_vendor {
         let owner = maker_by_pci(vid);
         let ctrl = owner.map(|m| m.name).or_else(|| controller_vendor(vid));
-        let ctrl_text = ctrl.map_or_else(|| format!("PCI vendor {vid:04x}"), |c| format!("{c} ({vid:04x})"));
+        let ctrl_text = ctrl.map_or_else(
+            || format!("PCI vendor {vid:04x}"),
+            |c| format!("{c} ({vid:04x})"),
+        );
         match (brand, owner) {
             (Some(b), Some(o)) if o.name == b.name => {
                 good = true;
-                signals.push((Mark::Good, format!("controller vendor {ctrl_text} matches the model")));
+                signals.push((
+                    Mark::Good,
+                    format!("controller vendor {ctrl_text} matches the model"),
+                ));
             }
             (Some(b), _) if b.own_controllers => {
                 bad += 1;
                 strong = true;
-                signals.push((Mark::Bad, format!("{} only uses its own controllers, this one is {ctrl_text}", b.name)));
+                signals.push((
+                    Mark::Bad,
+                    format!(
+                        "{} only uses its own controllers, this one is {ctrl_text}",
+                        b.name
+                    ),
+                ));
             }
             _ => signals.push((Mark::Info, format!("controller: {ctrl_text}"))),
         }
@@ -364,12 +436,18 @@ pub fn assess(e: &Evidence) -> Authenticity {
 
     if generic {
         let mark = if good { Mark::Info } else { Mark::Bad };
-        signals.push((mark, format!("model \"{}\" names no manufacturer", e.model.trim())));
+        signals.push((
+            mark,
+            format!("model \"{}\" names no manufacturer", e.model.trim()),
+        ));
     }
     if let Some(s) = &e.serial {
         if is_placeholder_serial(s) {
             bad += 1;
-            signals.push((Mark::Bad, format!("placeholder serial number \"{}\"", s.trim())));
+            signals.push((
+                Mark::Bad,
+                format!("placeholder serial number \"{}\"", s.trim()),
+            ));
         }
     }
     if e.in_smartctl_database == Some(false) && (generic || bad > 0) {
@@ -390,7 +468,10 @@ pub fn assess(e: &Evidence) -> Authenticity {
         Level::Unknown
     };
     if generic && good {
-        signals.push((Mark::Info, "OEM part: the model is generic but the maker ID is real".to_string()));
+        signals.push((
+            Mark::Info,
+            "OEM part: the model is generic but the maker ID is real".to_string(),
+        ));
     }
     out.signals = signals;
     out
@@ -400,15 +481,35 @@ pub fn assess(e: &Evidence) -> Authenticity {
 fn is_virtual(vendor: &str, model: &str) -> bool {
     let t = format!("{vendor} {model}").to_ascii_uppercase();
     [
-        "PERC", "LOGICAL VOLUME", "VIRTUAL", "MR9", "MEGARAID", "RAID", "QEMU", "VBOX", "VMWARE", "MSFT", "SMARTARRAY",
-        "LSI ", "AVAGO", "BROADCOM", "XEN", "RBD", "DRBD",
+        "PERC",
+        "LOGICAL VOLUME",
+        "VIRTUAL",
+        "MR9",
+        "MEGARAID",
+        "RAID",
+        "QEMU",
+        "VBOX",
+        "VMWARE",
+        "MSFT",
+        "SMARTARRAY",
+        "LSI ",
+        "AVAGO",
+        "BROADCOM",
+        "XEN",
+        "RBD",
+        "DRBD",
     ]
     .iter()
     .any(|k| t.contains(k))
 }
 
 /// Gather evidence for `d` from sysfs + SMART and assess it.
-pub fn for_device(d: &Device, smart: Option<&SmartData>, model: &str, serial: Option<&str>) -> Authenticity {
+pub fn for_device(
+    d: &Device,
+    smart: Option<&SmartData>,
+    model: &str,
+    serial: Option<&str>,
+) -> Authenticity {
     let sys = |f: &str| -> Option<String> {
         if crate::enumerate::is_demo() {
             return None;
@@ -432,16 +533,21 @@ pub fn for_device(d: &Device, smart: Option<&SmartData>, model: &str, serial: Op
         if crate::enumerate::is_demo() {
             return None;
         }
-        std::fs::read_dir("/dev/disk/by-id").ok()?.flatten().find_map(|e| {
-            let name = e.file_name().into_string().ok()?;
-            let hex = name.strip_prefix("wwn-0x")?;
-            let target = std::fs::read_link(e.path()).ok()?;
-            (target.file_name()?.to_str()? == d.name).then(|| hex.to_ascii_lowercase())
-        })
+        std::fs::read_dir("/dev/disk/by-id")
+            .ok()?
+            .flatten()
+            .find_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let hex = name.strip_prefix("wwn-0x")?;
+                let target = std::fs::read_link(e.path()).ok()?;
+                (target.file_name()?.to_str()? == d.name).then(|| hex.to_ascii_lowercase())
+            })
     };
     let no_wwn = wwid.as_deref().is_some_and(|w| w.starts_with("t10.ATA"));
     // NVMe: the namespace EUI-64 ("ac e4 2e 00 …"); `wwid` may be an NGUID.
-    let nvme_eui = sys("eui").map(|e| e.split_whitespace().collect::<String>()).filter(|e| e.len() == 16);
+    let nvme_eui = sys("eui")
+        .map(|e| e.split_whitespace().collect::<String>())
+        .filter(|e| e.len() == 16);
     let pci_vendor = if nvme {
         sys("device/device/vendor")
             .and_then(|v| u64::from_str_radix(v.trim_start_matches("0x"), 16).ok())
@@ -459,7 +565,10 @@ pub fn for_device(d: &Device, smart: Option<&SmartData>, model: &str, serial: Op
         wwn: if nvme {
             nvme_eui.or(sys_wwn.filter(|w| w.len() == 16))
         } else {
-            smart.and_then(|s| s.wwn.clone()).or(sys_wwn).or_else(by_id_wwn)
+            smart
+                .and_then(|s| s.wwn.clone())
+                .or(sys_wwn)
+                .or_else(by_id_wwn)
         },
         no_wwn,
         pci_vendor,
@@ -479,7 +588,10 @@ pub fn for_device(d: &Device, smart: Option<&SmartData>, model: &str, serial: Op
 pub fn to_json(a: &Authenticity) -> Json {
     let opt = |v: Option<&str>| v.map_or(Json::Null, |s| json::string(s.to_string()));
     json::object(vec![
-        ("level", json::string(a.level.label().to_ascii_lowercase().replace(' ', "_"))),
+        (
+            "level",
+            json::string(a.level.label().to_ascii_lowercase().replace(' ', "_")),
+        ),
         ("summary", json::string(a.summary())),
         ("brand", opt(a.brand)),
         ("maker", opt(a.maker)),
@@ -495,7 +607,10 @@ pub fn to_json(a: &Authenticity) -> Json {
                             Mark::Info => "info",
                             Mark::Bad => "bad",
                         };
-                        json::object(vec![("mark", json::string(mark.to_string())), ("text", json::string(t.clone()))])
+                        json::object(vec![
+                            ("mark", json::string(mark.to_string())),
+                            ("text", json::string(t.clone())),
+                        ])
                     })
                     .collect(),
             ),
@@ -508,7 +623,12 @@ mod tests {
     use super::*;
 
     fn ev(model: &str, wwn: Option<&str>) -> Evidence {
-        Evidence { model: model.into(), serial: Some("S5CNNA0N209858".into()), wwn: wwn.map(str::to_string), ..Default::default() }
+        Evidence {
+            model: model.into(),
+            serial: Some("S5CNNA0N209858".into()),
+            wwn: wwn.map(str::to_string),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -533,7 +653,10 @@ mod tests {
     fn brand_with_zero_or_missing_wwn_is_suspicious() {
         let a = assess(&ev("Samsung SSD 870 EVO 1TB", Some("0000000000000000")));
         assert_eq!(a.level, Level::Suspicious);
-        let a = assess(&Evidence { no_wwn: true, ..ev("Samsung SSD 870 EVO 1TB", None) });
+        let a = assess(&Evidence {
+            no_wwn: true,
+            ..ev("Samsung SSD 870 EVO 1TB", None)
+        });
         assert_eq!(a.level, Level::Suspicious);
     }
 
@@ -547,27 +670,45 @@ mod tests {
         });
         assert_eq!(a.level, Level::Unbranded);
         assert!(a.signals.iter().any(|(_, t)| t.contains("no WWN")));
-        assert!(a.signals.iter().any(|(_, t)| t.contains("names no manufacturer")));
+        assert!(
+            a.signals
+                .iter()
+                .any(|(_, t)| t.contains("names no manufacturer"))
+        );
         assert!(a.signals.iter().any(|(_, t)| t.contains("smartctl")));
     }
 
     #[test]
     fn samsung_nvme_on_a_foreign_controller_is_likely_fake() {
-        let e = Evidence { nvme: true, pci_vendor: Some(0x1e4b), ..ev("Samsung SSD 980 PRO 1TB", None) };
+        let e = Evidence {
+            nvme: true,
+            pci_vendor: Some(0x1e4b),
+            ..ev("Samsung SSD 980 PRO 1TB", None)
+        };
         let a = assess(&e);
         assert_eq!(a.level, Level::LikelyFake);
         assert!(a.signals.iter().any(|(_, t)| t.contains("Maxio")));
-        let a = assess(&Evidence { pci_vendor: Some(0x144d), ..e });
+        let a = assess(&Evidence {
+            pci_vendor: Some(0x144d),
+            ..e
+        });
         assert_eq!(a.level, Level::Consistent);
         // Brands that buy controllers are not flagged for it.
-        let a = assess(&Evidence { nvme: true, pci_vendor: Some(0x1987), ..ev("Seagate FireCuda 530", None) });
+        let a = assess(&Evidence {
+            nvme: true,
+            pci_vendor: Some(0x1987),
+            ..ev("Seagate FireCuda 530", None)
+        });
         assert_eq!(a.level, Level::Unverified);
     }
 
     #[test]
     fn sas_and_hdd_families() {
         // Toshiba (ex-Fujitsu) SAS HDD from the fixture.
-        let a = assess(&Evidence { vendor: "TOSHIBA".into(), ..ev("MBF2300RC", Some("50000393e822400c")) });
+        let a = assess(&Evidence {
+            vendor: "TOSHIBA".into(),
+            ..ev("MBF2300RC", Some("50000393e822400c"))
+        });
         assert_eq!(a.level, Level::Consistent);
         let a = assess(&ev("WDC WD10SPZX-00Z10T0", Some("50014ee2b5c3d4e5")));
         assert_eq!(a.level, Level::Consistent);
@@ -582,7 +723,14 @@ mod tests {
     #[test]
     fn nvme_eui64_oui() {
         // Dell-branded SK hynix PE8110 (melbicom-ded): EUI-64 ace42e0045470185.
-        let a = assess(&Evidence { nvme: true, pci_vendor: Some(0x1c5c), ..ev("DELL NVME ISE PE8110 RI U.2 960GB", Some("ace42e0045470185")) });
+        let a = assess(&Evidence {
+            nvme: true,
+            pci_vendor: Some(0x1c5c),
+            ..ev(
+                "DELL NVME ISE PE8110 RI U.2 960GB",
+                Some("ace42e0045470185"),
+            )
+        });
         assert_eq!(a.maker, Some("SK hynix"));
         assert_eq!(a.level, Level::Consistent);
     }
@@ -596,13 +744,32 @@ mod tests {
 
     #[test]
     fn detects_generic_models_and_placeholder_serials() {
-        for m in ["SSD 1TB", "NVMe SSD 512GB", "2.5\" SATA SSD", "Generic", "SATA SSD", "M.2 NVMe SSD 1TB", "256GB SSD"] {
+        for m in [
+            "SSD 1TB",
+            "NVMe SSD 512GB",
+            "2.5\" SATA SSD",
+            "Generic",
+            "SATA SSD",
+            "M.2 NVMe SSD 1TB",
+            "256GB SSD",
+        ] {
             assert!(is_generic_model(m), "{m}");
         }
-        for m in ["KINGSTON SA400S37240G", "SPCC Solid State Disk", "TEAM T253X2256G", "ST1000LM035"] {
+        for m in [
+            "KINGSTON SA400S37240G",
+            "SPCC Solid State Disk",
+            "TEAM T253X2256G",
+            "ST1000LM035",
+        ] {
             assert!(!is_generic_model(m), "{m}");
         }
-        for s in ["", "0000000000", "0123456789ABCDEF", "AA000000000000000123", "FFFFFFFF"] {
+        for s in [
+            "",
+            "0000000000",
+            "0123456789ABCDEF",
+            "AA000000000000000123",
+            "FFFFFFFF",
+        ] {
             assert!(is_placeholder_serial(s), "{s}");
         }
         assert!(!is_placeholder_serial("S5CNNA0N209858"));
@@ -611,9 +778,15 @@ mod tests {
 
     #[test]
     fn short_prefixes_need_a_digit() {
-        assert_eq!(claimed_brand("", "ST1000LM035").map(|m| m.name), Some("Seagate"));
+        assert_eq!(
+            claimed_brand("", "ST1000LM035").map(|m| m.name),
+            Some("Seagate")
+        );
         assert!(claimed_brand("", "STORAGE DEVICE").is_none());
-        assert_eq!(claimed_brand("", "CT500MX500SSD1").map(|m| m.name), Some("Micron/Crucial"));
+        assert_eq!(
+            claimed_brand("", "CT500MX500SSD1").map(|m| m.name),
+            Some("Micron/Crucial")
+        );
         assert!(claimed_brand("ATA", "SSD 1TB").is_none());
     }
 
@@ -621,7 +794,10 @@ mod tests {
     fn raid_volumes_are_not_judged() {
         assert!(is_virtual("DELL", "PERC H730 Mini"));
         assert!(!is_virtual("ATA", "MZ7KH480HAHQ0D3"));
-        let a = assess(&Evidence { virtual_disk: true, ..ev("PERC H730 Mini", Some("6b8ca3a0f1e2d3c4")) });
+        let a = assess(&Evidence {
+            virtual_disk: true,
+            ..ev("PERC H730 Mini", Some("6b8ca3a0f1e2d3c4"))
+        });
         assert_eq!(a.level, Level::Unknown);
     }
 }

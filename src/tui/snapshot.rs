@@ -11,14 +11,31 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
-use ratatui::Terminal;
 
-use super::{views, App, ColorMode, DevHealth, Palette, Screen, Ui, VerifyState};
+use super::{App, DevHealth, Screen, VerifyState, views};
 use crate::model::Device;
 use crate::report;
+use wayang_tui::theme::{Flags, Palette, Theme};
+
+/// The snapshot renderer is deterministic: the neon palette resolved from
+/// flags alone, never from the environment (so `NO_COLOR` cannot change a
+/// published screenshot).
+fn theme(light: bool) -> Theme {
+    Theme::from_env(
+        super::DCHECK,
+        Flags {
+            light,
+            ..Flags::default()
+        },
+        false,
+        Some("truecolor"),
+        None,
+    )
+}
 
 pub struct Options {
     pub demo: bool,
@@ -39,7 +56,10 @@ pub struct Options {
 fn mask(serial: &str) -> String {
     let keep = serial.chars().count().min(4);
     let head: String = serial.chars().take(keep).collect();
-    format!("{head}{}", "•".repeat(serial.chars().count().saturating_sub(keep).max(4)))
+    format!(
+        "{head}{}",
+        "•".repeat(serial.chars().count().saturating_sub(keep).max(4))
+    )
 }
 
 pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<Vec<PathBuf>> {
@@ -76,12 +96,17 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
         }
     }
 
-    let pal = Palette::new(ColorMode::Neon, opts.light, false);
-    let mut app = App::new(devices, pal.clone(), Ui { plain: false }, opts.demo, false, false);
+    let theme = theme(opts.light);
+    let mut app = App::new(devices, theme.clone(), opts.demo, false, false);
     if let Some(h) = &opts.host {
         app.host = h.clone();
     }
-    app.health = app.devices.iter().zip(&metrics).map(|(d, m)| DevHealth::for_device(d, m.as_ref())).collect();
+    app.health = app
+        .devices
+        .iter()
+        .zip(&metrics)
+        .map(|(d, m)| DevHealth::for_device(d, m.as_ref()))
+        .collect();
     let ram = crate::ram::read();
     app.ram_lines = report::ram_report_lines(&ram);
     app.ram = Some(ram);
@@ -93,7 +118,7 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
     let mut shot = |app: &mut App, name: &str| -> io::Result<()> {
         let mut term = Terminal::new(TestBackend::new(opts.width, opts.height))?;
         term.draw(|f| views::draw(f, app))?;
-        let svg = to_svg(term.backend().buffer(), &pal);
+        let svg = to_svg(term.backend().buffer(), &theme);
         let path = dir.join(format!("{name}.svg"));
         std::fs::write(&path, svg)?;
         written.push(path);
@@ -105,7 +130,10 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
     shot(&mut app, "01-splash")?;
 
     app.screen = Screen::Menu;
-    for (i, name) in ["02-deck-storage", "03-deck-memory", "04-deck-processor"].iter().enumerate() {
+    for (i, name) in ["02-deck-storage", "03-deck-memory", "04-deck-processor"]
+        .iter()
+        .enumerate()
+    {
         app.menu.select(Some(i));
         shot(&mut app, name)?;
     }
@@ -125,7 +153,10 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
         })
         .collect();
     let tool_dev = match &opts.tools {
-        Some(t) => app.devices.iter().position(|d| d.path == *t || d.name == *t),
+        Some(t) => app
+            .devices
+            .iter()
+            .position(|d| d.path == *t || d.name == *t),
         None => wanted.first().copied(),
     };
     for i in wanted {
@@ -148,8 +179,15 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
     shot(&mut app, "07-memory")?;
     app.screen = Screen::Cpu;
     shot(&mut app, "08-processor")?;
-    let board = if opts.demo { crate::board::demo() } else { crate::board::read() };
-    app.board_lines = report::board_report_lines(&board).iter().map(|l| scrub(l)).collect();
+    let board = if opts.demo {
+        crate::board::demo()
+    } else {
+        crate::board::read()
+    };
+    app.board_lines = report::board_report_lines(&board)
+        .iter()
+        .map(|l| scrub(l))
+        .collect();
     if opts.mask_serials {
         let mut b = board;
         b.system.serial = b.system.serial.as_deref().map(mask);
@@ -193,7 +231,10 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
             (g, m)
         };
         if let Ok(g) = g {
-            app.recover_lines = crate::recover::report_lines(&g).iter().map(|l| scrub(l)).collect();
+            app.recover_lines = crate::recover::report_lines(&g)
+                .iter()
+                .map(|l| scrub(l))
+                .collect();
             if let Some(Ok(m)) = &m {
                 app.recover_lines.extend(crate::recover::share_lines(m));
             }
@@ -204,15 +245,24 @@ pub fn run(dir: &Path, mut devices: Vec<Device>, opts: &Options) -> io::Result<V
             shot(&mut app, &format!("10-recover-{}", d.name))?;
         }
         // Capacity test: the plan only.
-        let plan = if opts.demo { Ok(crate::verify::demo_plan(&d, false)) } else { crate::verify::plan(&d, None) };
+        let plan = if opts.demo {
+            Ok(crate::verify::demo_plan(&d, false))
+        } else {
+            crate::verify::plan(&d, None)
+        };
         app.verify = VerifyState::Plan { plan, full: false };
         app.screen = Screen::Verify;
         shot(&mut app, &format!("11-verify-plan-{}", d.name))?;
         // Demo only: a simulated counterfeit drive, run to the verdict.
         if opts.demo {
             let plan = crate::verify::demo_plan(&d, true);
-            let (o, _) = crate::verify::run_plan(&plan, plan.room, &mut |_, _, _| {}).map_err(io::Error::other)?;
-            let (lines, code) = crate::verify::outcome_lines(&format!("{} (simulated counterfeit)", d.path), &o, true);
+            let (o, _) = crate::verify::run_plan(&plan, plan.room, &mut |_, _, _| {})
+                .map_err(io::Error::other)?;
+            let (lines, code) = crate::verify::outcome_lines(
+                &format!("{} (simulated counterfeit)", d.path),
+                &o,
+                true,
+            );
             app.verify_lines = lines;
             app.verify = VerifyState::Done { code };
             app.scroll = 0;
@@ -272,7 +322,10 @@ fn glyph_rects(sym: &str) -> Option<Vec<(f64, f64, f64, f64)>> {
     let corner = |t: f64, right: bool, down: bool| -> Vec<(f64, f64, f64, f64)> {
         let hx = if right { cx - t / 2.0 } else { 0.0 };
         let vy = if down { cy - t / 2.0 } else { 0.0 };
-        vec![(hx, cy - t / 2.0, w / 2.0 + t / 2.0, t), (cx - t / 2.0, vy, t, h / 2.0 + t / 2.0)]
+        vec![
+            (hx, cy - t / 2.0, w / 2.0 + t / 2.0, t),
+            (cx - t / 2.0, vy, t, h / 2.0 + t / 2.0),
+        ]
     };
     let (thin, heavy) = (1.3, 2.6);
     Some(match sym {
@@ -297,11 +350,14 @@ fn glyph_rects(sym: &str) -> Option<Vec<(f64, f64, f64, f64)>> {
 }
 
 fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Cell grid -> standalone SVG.
-pub fn to_svg(buf: &Buffer, pal: &Palette) -> String {
+pub fn to_svg(buf: &Buffer, theme: &Theme) -> String {
+    let pal: &Palette = &theme.palette;
     let (w, h) = (buf.area.width, buf.area.height);
     let page_bg = hex(pal.bg.unwrap_or(Color::Rgb(10, 14, 20)), "#0a0e14");
     let page_fg = hex(pal.fg, "#c4d2e0");
@@ -312,7 +368,10 @@ pub fn to_svg(buf: &Buffer, pal: &Palette) -> String {
         out,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {px_w} {px_h}" width="{px_w}" height="{px_h}" font-family="'JetBrains Mono','DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="{FONT_SIZE}">"#
     );
-    let _ = write!(out, r#"<rect width="100%" height="100%" fill="{page_bg}"/>"#);
+    let _ = write!(
+        out,
+        r#"<rect width="100%" height="100%" fill="{page_bg}"/>"#
+    );
 
     // Glyph rectangles are drawn after all backgrounds of their row.
     let mut glyphs: Vec<(f64, f64, f64, f64, String)> = Vec::new();

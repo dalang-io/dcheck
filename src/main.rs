@@ -1,42 +1,21 @@
 //! dcheck — device health check.
 //!
-//! M1: CLI skeleton, block-device enumeration (identity + capacity).
-//! Storage health (native SMART) and the TUI arrive in later milestones.
+//! The CLI: argument parsing, exit codes, the interactive menu and the
+//! `SIGPIPE` fixup. Everything else lives in the library (`src/lib.rs`), so the
+//! engine can be reused without a `main`.
+//!
 //! See `docs/DCHECK.md`.
 
-// Edition 2024 stabilises `let` chains, so `clippy::collapsible_if` now flags
-// the deliberately-nested `if let` / `if` pairs throughout this crate and wants
-// them rewritten as `&&` chains. That is a pure style lint; rewriting ~50 sites
-// would add a large, behaviour-neutral diff, so the suggestion is allowed.
+// Same crate-wide style exception as `src/lib.rs` — the argument parser below
+// keeps its deliberately-nested `if let` / `if` pairs.
 #![allow(clippy::collapsible_if)]
 
-mod authenticity;
-mod bench;
-mod board;
-mod cache;
-mod config;
-mod cpu;
-mod enumerate;
-mod health;
-mod ipmi;
-mod json;
-mod kernlog;
-mod model;
-mod monitor;
-mod mount;
-mod native;
-mod oui_table;
-mod ram;
-mod recover;
-mod report;
-mod smartctl;
-mod tui;
-mod undelete;
-mod update;
-mod verify;
-mod virt;
-
 use std::io::{self, IsTerminal, Write};
+
+use dcheck::{
+    bench, board, cache, config, cpu, enumerate, json, model, monitor, native, ram, recover,
+    report, tui, undelete, update, verify,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -177,9 +156,8 @@ fn run_tui(
 ) -> i32 {
     let light = config::resolve_light(light_override);
     let mouse = mouse_override.unwrap_or_else(|| config::load().mouse);
-    let plain = plain_override.unwrap_or_else(|| {
-        config::load().plain || std::env::var_os("DCHECK_PLAIN").is_some()
-    });
+    let plain = plain_override
+        .unwrap_or_else(|| config::load().plain || std::env::var_os("DCHECK_PLAIN").is_some());
     let transparent = transparent_override.unwrap_or_else(|| {
         config::load().transparent || std::env::var_os("DCHECK_TRANSPARENT").is_some()
     });
@@ -431,9 +409,9 @@ fn storage_cmd(args: &[String], session_demo: bool) -> i32 {
                 if json {
                     println!(
                         "{}",
-                        crate::json::object(vec![(
+                        json::object(vec![(
                             "error",
-                            crate::json::string(format!("device '{sel}' not found")),
+                            json::string(format!("device '{sel}' not found")),
                         )])
                     );
                 } else {
@@ -464,9 +442,8 @@ fn storage_cmd(args: &[String], session_demo: bool) -> i32 {
     }
 
     if json {
-        let items: Vec<crate::json::Json> =
-            devices.iter().map(report::device_json_basic).collect();
-        println!("{}", crate::json::Json::Arr(items));
+        let items: Vec<json::Json> = devices.iter().map(report::device_json_basic).collect();
+        println!("{}", json::Json::Arr(items));
         return 0;
     }
 
@@ -605,7 +582,9 @@ fn run_bench(dev: &model::Device) -> i32 {
             0
         }
         None => {
-            eprintln!("dcheck: benchmark unavailable (needs Linux and read access to the raw device)");
+            eprintln!(
+                "dcheck: benchmark unavailable (needs Linux and read access to the raw device)"
+            );
             1
         }
     }

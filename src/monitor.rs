@@ -54,7 +54,10 @@ pub fn diff_alert(prev: &[DevState], cur: &[DevState]) -> Vec<String> {
             None => alerts.push(format!("{} appeared ({})", c.device, c.verdict)),
             Some(p) => {
                 if c.severity > p.severity {
-                    alerts.push(format!("{} worsened: {} -> {}", c.device, p.verdict, c.verdict));
+                    alerts.push(format!(
+                        "{} worsened: {} -> {}",
+                        c.device, p.verdict, c.verdict
+                    ));
                 }
                 for issue in &c.issues {
                     if !p.issues.contains(issue) {
@@ -92,21 +95,11 @@ fn states_json(states: &[DevState]) -> Json {
                     ("severity", json::num(s.severity as f64)),
                     (
                         "issues",
-                        Json::Arr(
-                            s.issues
-                                .iter()
-                                .map(|i| json::string(i.clone()))
-                                .collect(),
-                        ),
+                        Json::Arr(s.issues.iter().map(|i| json::string(i.clone())).collect()),
                     ),
                     (
                         "notes",
-                        Json::Arr(
-                            s.notes
-                                .iter()
-                                .map(|n| json::string(n.clone()))
-                                .collect(),
-                        ),
+                        Json::Arr(s.notes.iter().map(|n| json::string(n.clone())).collect()),
                     ),
                 ])
             })
@@ -121,7 +114,11 @@ pub fn check(devices: &[Device], as_json: bool) -> i32 {
         println!("{}", states_json(&states));
     } else {
         for s in &states {
-            let detail = if s.verdict == "VIRTUAL" { s.notes.join("; ") } else { s.issues.join("; ") };
+            let detail = if s.verdict == "VIRTUAL" {
+                s.notes.join("; ")
+            } else {
+                s.issues.join("; ")
+            };
             println!("{:<14} {:<12} {}", s.device, s.verdict, detail);
         }
     }
@@ -154,7 +151,12 @@ pub fn watch(
         } else if !quiet {
             let ts = now_secs();
             for s in &cur {
-                println!("[{ts}] {:<14} {:<12} {}", s.device, s.verdict, s.issues.join("; "));
+                println!(
+                    "[{ts}] {:<14} {:<12} {}",
+                    s.device,
+                    s.verdict,
+                    s.issues.join("; ")
+                );
             }
         }
 
@@ -183,7 +185,10 @@ fn now_secs() -> u64 {
 fn webhook_body(states: &[DevState], alerts: &[String]) -> Json {
     json::object(vec![
         ("event", json::string("dcheck.alert")),
-        ("alerts", Json::Arr(alerts.iter().map(|a| json::string(a.clone())).collect())),
+        (
+            "alerts",
+            Json::Arr(alerts.iter().map(|a| json::string(a.clone())).collect()),
+        ),
         ("devices", states_json(states)),
     ])
 }

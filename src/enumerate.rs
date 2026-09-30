@@ -236,7 +236,12 @@ fn read_identity(
     root: &Path,
     name: &str,
     base: &Path,
-) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let vendor = read_str(base.join("device/vendor"));
     let mut model = read_str(base.join("device/model"));
     let mut firmware = read_str(base.join("device/rev"));
@@ -362,7 +367,10 @@ fn read_mounts(root: &Path) -> Mounts {
         let entry = (decode_octal(fields[4]), fstype.to_string());
 
         let devnum = fields[2].to_string();
-        mounts.by_devnum.entry(devnum).or_insert_with(|| entry.clone());
+        mounts
+            .by_devnum
+            .entry(devnum)
+            .or_insert_with(|| entry.clone());
 
         if let Some(source) = fields.get(sep + 2) {
             if source.starts_with("/dev/") {
@@ -559,35 +567,75 @@ pub fn demo_devices() -> Vec<Device> {
 
     vec![
         dev(
-            "nvme0n1", None, "Samsung SSD 980 500GB", "2B4QFXO7", "S5GXNX0R123456",
-            Bus::Nvme, MediaKind::Nvme, 500_000_000_000, false,
+            "nvme0n1",
+            None,
+            "Samsung SSD 980 500GB",
+            "2B4QFXO7",
+            "S5GXNX0R123456",
+            Bus::Nvme,
+            MediaKind::Nvme,
+            500_000_000_000,
+            false,
             vec![
                 part("/dev/nvme0n1p1", 100_000_000_000, Some("/"), Some("ext4")),
                 part("/dev/nvme0n1p2", 300_000_000_000, None, None),
             ],
         ),
         dev(
-            "sda", Some("ATA"), "KINGSTON SA400S37", "R0105A", "ABC123",
-            Bus::Sata, MediaKind::Ssd, 240_000_000_000, false,
+            "sda",
+            Some("ATA"),
+            "KINGSTON SA400S37",
+            "R0105A",
+            "ABC123",
+            Bus::Sata,
+            MediaKind::Ssd,
+            240_000_000_000,
+            false,
             vec![
                 part("/dev/sda1", 1_000_000_000, Some("/boot"), Some("vfat")),
                 part("/dev/sda2", 200_000_000_000, None, None),
             ],
         ),
         dev(
-            "sdb", Some("ATA"), "WDC WD10SPZX-00Z10T0", "01.01A01", "WD-XYZ",
-            Bus::Sata, MediaKind::Hdd, 1_000_000_000_000, false,
+            "sdb",
+            Some("ATA"),
+            "WDC WD10SPZX-00Z10T0",
+            "01.01A01",
+            "WD-XYZ",
+            Bus::Sata,
+            MediaKind::Hdd,
+            1_000_000_000_000,
+            false,
             vec![part("/dev/sdb1", 1_000_000_000_000, None, None)],
         ),
         dev(
-            "sdc", Some("Generic"), "Flash Disk", "8.07", "USB-0001",
-            Bus::Usb, MediaKind::Ssd, 16_000_000_000, true,
+            "sdc",
+            Some("Generic"),
+            "Flash Disk",
+            "8.07",
+            "USB-0001",
+            Bus::Usb,
+            MediaKind::Ssd,
+            16_000_000_000,
+            true,
             vec![],
         ),
         dev(
-            "mmcblk0", None, "SD32G", "0x0", "MMC-0001",
-            Bus::Mmc, MediaKind::Ssd, 32_000_000_000, false,
-            vec![part("/dev/mmcblk0p1", 32_000_000_000, Some("/media/card"), Some("ext4"))],
+            "mmcblk0",
+            None,
+            "SD32G",
+            "0x0",
+            "MMC-0001",
+            Bus::Mmc,
+            MediaKind::Ssd,
+            32_000_000_000,
+            false,
+            vec![part(
+                "/dev/mmcblk0p1",
+                32_000_000_000,
+                Some("/media/card"),
+                Some("ext4"),
+            )],
         ),
     ]
 }
@@ -714,7 +762,10 @@ mod macos {
 
         #[test]
         fn parses_diskutil_size() {
-            assert_eq!(parse_size_bytes("500.3 GB (500277790720 Bytes)"), Some(500277790720));
+            assert_eq!(
+                parse_size_bytes("500.3 GB (500277790720 Bytes)"),
+                Some(500277790720)
+            );
             assert_eq!(parse_size_bytes("no size here"), None);
         }
     }
@@ -802,7 +853,9 @@ mod tests {
 
     #[test]
     fn ignores_virtual_block_devices() {
-        for name in ["rbd0", "rbd63", "drbd1", "bcache0", "dm-3", "loop7", "nbd0", "zd16", "md127"] {
+        for name in [
+            "rbd0", "rbd63", "drbd1", "bcache0", "dm-3", "loop7", "nbd0", "zd16", "md127",
+        ] {
             assert!(is_ignored(name), "{name} should be skipped");
         }
         for name in ["sda", "nvme0n1", "mmcblk0", "vda", "xvda"] {
@@ -864,9 +917,10 @@ mod tests {
     fn mounts_fall_back_to_source_path() {
         // btrfs reports an anonymous 0:NN device; the /dev path must still match.
         let mut mounts = Mounts::default();
-        mounts
-            .by_source
-            .insert("/dev/sda3".to_string(), ("/".to_string(), "btrfs".to_string()));
+        mounts.by_source.insert(
+            "/dev/sda3".to_string(),
+            ("/".to_string(), "btrfs".to_string()),
+        );
         assert_eq!(
             mounts.lookup("0:34", "/dev/sda3"),
             Some(("/".to_string(), "btrfs".to_string()))

@@ -2,14 +2,13 @@
 //! dashboard, memory, processor, recovery, capacity test, and the help
 //! overlay.
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap};
-use ratatui::Frame;
 
-use super::theme::{Palette, Ui};
-use super::widgets as w;
+use super::brand;
 use super::{App, Screen, VerifyState};
 use crate::cpu::CpuInfo;
 use crate::health::Health;
@@ -17,6 +16,9 @@ use crate::model::Device;
 use crate::ram::RamInfo;
 use crate::report::{human_size, human_size_bin, mount_summary};
 use crate::smartctl::SmartData;
+use wayang_tui::theme::{Palette, Theme};
+// The shared widget set; `brand` adds dcheck's own panel and logotype.
+use wayang_tui::widgets as w;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Width of the label column in vitals panels.
@@ -26,7 +28,7 @@ const VW: usize = 15;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    f.render_widget(Block::default().style(app.pal.base()), area);
+    f.render_widget(Block::default().style(app.theme.palette.base()), area);
 
     if app.screen == Screen::Splash {
         splash(f, app, area);
@@ -72,7 +74,8 @@ fn severity_label(sev: u8) -> &'static str {
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
     let bar = match p.bar {
         Some(bg) => p.base().bg(bg),
         None => p.base(),
@@ -122,7 +125,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             p.bold(p.accent),
         ));
     } else {
-        right.push(w::badge(sev, label, p, ui));
+        right.push(w::badge(sev, label, theme));
     }
     right.push(Span::styled(format!(" {ctx} "), p.fg(p.dim)));
 
@@ -146,14 +149,24 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let rw = (right.width() as u16).min(area.width);
     let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(rw)]).areas(area);
     f.render_widget(Paragraph::new(Line::from(left)).style(bar), l);
-    f.render_widget(Paragraph::new(right).alignment(Alignment::Right).style(bar), r);
+    f.render_widget(
+        Paragraph::new(right).alignment(Alignment::Right).style(bar),
+        r,
+    );
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
     let nav = if ui.plain { "j/k" } else { "↑↓" };
     let items: &[(&str, &str)] = match app.screen {
-        Screen::Menu => &[(nav, "nav"), ("enter", "open"), ("1-4", "jump"), ("?", "help"), ("q", "quit")],
+        Screen::Menu => &[
+            (nav, "nav"),
+            ("enter", "open"),
+            ("1-4", "jump"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
         Screen::Storage => &[
             (nav, "select"),
             ("enter", "report"),
@@ -192,7 +205,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Screen::Verify => match app.verify {
             VerifyState::Plan { .. } => &[(nav, "size"), ("y", "start test"), ("esc", "cancel")],
             VerifyState::Running { .. } => &[("esc", "stop (test files are removed)")],
-            _ => &[(nav, "scroll"), ("c", "copy"), ("esc", "back"), ("q", "quit")],
+            _ => &[
+                (nav, "scroll"),
+                ("c", "copy"),
+                ("esc", "back"),
+                ("q", "quit"),
+            ],
         },
         _ => &[
             (nav, "scroll"),
@@ -203,11 +221,14 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("q", "quit"),
         ],
     };
-    let mut line = w::keycaps(items, p);
+    let mut line = w::keycaps(items, theme);
     line.spans.insert(0, Span::raw(" "));
     f.render_widget(Paragraph::new(line).style(p.base()), area);
     if let Some(status) = &app.status {
-        let msg = Line::from(Span::styled(format!("{} {status} ", ui.arrow()), p.bold(p.accent2)));
+        let msg = Line::from(Span::styled(
+            format!("{} {status} ", ui.arrow()),
+            p.bold(p.accent2),
+        ));
         f.render_widget(Paragraph::new(msg).alignment(Alignment::Right), area);
     }
 }
@@ -215,17 +236,21 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 // ─── splash ─────────────────────────────────────────────────────────────────
 
 fn splash(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
+    let theme = &app.theme;
+    let p = &theme.palette;
     let elapsed = app.started.elapsed().as_millis() as u64;
     let steps: [(&str, String); 4] = [
         ("SYSFS / PROC BUS", "LINKED".into()),
         ("BLOCK DEVICES", format!("{} FOUND", app.devices.len())),
-        ("SMART ENGINE", if app.demo { "SIMULATED" } else { "ARMED" }.into()),
+        (
+            "SMART ENGINE",
+            if app.demo { "SIMULATED" } else { "ARMED" }.into(),
+        ),
         ("TELEMETRY", "ONLINE".into()),
     ];
     let shown = ((elapsed / 100) as usize + 1).min(steps.len());
 
-    let mut lines = w::logo_lines(ui, p);
+    let mut lines = brand::logo_lines(theme);
     lines.push(Line::from(Span::styled(
         format!("DEVICE HEALTH SYSTEM  v{VERSION}"),
         p.fg(p.dim),
@@ -243,11 +268,22 @@ fn splash(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from(""));
     let pct = (elapsed as f64 / super::SPLASH.as_millis() as f64 * 100.0).min(100.0);
-    lines.push(w::gauge("BOOT  ", 6, pct, 30, p.accent, &format!("{pct:>3.0}%"), p, ui));
+    lines.push(w::gauge(
+        "BOOT  ",
+        6,
+        pct,
+        30,
+        p.accent,
+        &format!("{pct:>3.0}%"),
+        theme,
+    ));
 
     let h = lines.len() as u16;
     let r = w::centered(area, 46, h);
-    f.render_widget(Paragraph::new(Text::from(lines)).alignment(Alignment::Center), r);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).alignment(Alignment::Center),
+        r,
+    );
 }
 
 // ─── menu / command deck ────────────────────────────────────────────────────
@@ -261,10 +297,11 @@ fn menu(f: &mut Frame, app: &mut App, area: Rect) {
         (area, None)
     };
 
-    let (p, ui) = (app.pal.clone(), app.ui);
-    let inner = w::panel(f, left, "MODULES", None, &p, ui);
+    let theme = app.theme.clone();
+    let (p, ui) = (&theme.palette, theme.ui);
+    let inner = brand::panel(f, left, "MODULES", None, &theme);
 
-    let logo = w::logo_lines(ui, &p);
+    let logo = brand::logo_lines(&theme);
     let logo_h = if inner.height as usize >= logo.len() + 7 {
         logo.len() as u16 + 1
     } else {
@@ -285,10 +322,18 @@ fn menu(f: &mut Frame, app: &mut App, area: Rect) {
     // (number, name, (severity, loading)) — EXIT has no status.
     type Entry = (&'static str, &'static str, Option<(u8, bool)>);
     let entries: [Entry; 5] = [
-        ("01", "STORAGE", Some((app.worst_device(), app.health_rx.is_some()))),
+        (
+            "01",
+            "STORAGE",
+            Some((app.worst_device(), app.health_rx.is_some())),
+        ),
         ("02", "MEMORY", Some((ram_sev, app.ram_rx.is_some()))),
         ("03", "PROCESSOR", Some((cpu_sev, app.cpu_rx.is_some()))),
-        ("04", "MOTHERBOARD", Some((board_sev, app.board_rx.is_some()))),
+        (
+            "04",
+            "MOTHERBOARD",
+            Some((board_sev, app.board_rx.is_some())),
+        ),
         ("00", "EXIT", None),
     ];
     let row_w = list_area.width.saturating_sub(2) as usize;
@@ -331,54 +376,87 @@ fn menu(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn scanning_line(app: &App, what: &str) -> Line<'static> {
     Line::from(Span::styled(
-        format!("{} {what}", app.ui.spinner(app.tick)),
-        app.pal.bold(app.pal.accent),
+        format!("{} {what}", app.theme.ui.spinner(app.tick)),
+        app.theme.palette.bold(app.theme.palette.accent),
     ))
 }
 
 fn storage_card(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
-    let right = Line::from(Span::styled(format!(" {} ATTACHED ", app.devices.len()), p.fg(p.dim)));
-    let inner = w::panel(f, area, "STORAGE ARRAY", Some(right), p, ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
+    let right = Line::from(Span::styled(
+        format!(" {} ATTACHED ", app.devices.len()),
+        p.fg(p.dim),
+    ));
+    let inner = brand::panel(f, area, "STORAGE ARRAY", Some(right), theme);
     let mut lines = Vec::new();
     if app.health_rx.is_some() {
         lines.push(w::field(
             "STATUS",
             LW,
-            vec![Span::styled(format!("{} SCANNING", ui.spinner(app.tick)), p.bold(p.accent))],
-            p,
+            vec![Span::styled(
+                format!("{} SCANNING", ui.spinner(app.tick)),
+                p.bold(p.accent),
+            )],
+            theme,
         ));
     } else {
         let s = app.worst_device();
-        lines.push(w::field("STATUS", LW - 1, vec![w::badge(s, severity_label(s), p, ui)], p));
+        lines.push(w::field(
+            "STATUS",
+            LW - 1,
+            vec![w::badge(s, severity_label(s), theme)],
+            theme,
+        ));
     }
-    let mounted = app.devices.iter().filter(|d| mount_summary(d) != "-").count();
+    let mounted = app
+        .devices
+        .iter()
+        .filter(|d| mount_summary(d) != "-")
+        .count();
     let total: u64 = app.devices.iter().map(|d| d.size_bytes).sum();
     lines.push(w::field(
         "DEVICES",
         LW,
         vec![Span::styled(
-            format!("{} attached {} {} mounted", app.devices.len(), ui.dot(), mounted),
+            format!(
+                "{} attached {} {} mounted",
+                app.devices.len(),
+                ui.dot(),
+                mounted
+            ),
             p.fg(p.fg),
         )],
-        p,
+        theme,
     ));
-    lines.push(w::field("CAPACITY", LW, vec![Span::styled(format!("{} raw", human_size(total)), p.fg(p.fg))], p));
+    lines.push(w::field(
+        "CAPACITY",
+        LW,
+        vec![Span::styled(
+            format!("{} raw", human_size(total)),
+            p.fg(p.fg),
+        )],
+        theme,
+    ));
     lines.push(Line::from(""));
-    lines.push(w::caption("UNITS", inner.width, p, ui));
+    lines.push(w::caption("UNITS", inner.width, theme));
     let room = (inner.height as usize).saturating_sub(lines.len() + 2);
     for (i, d) in app.devices.iter().enumerate().take(room) {
-        let h = app.health.get(i).cloned().unwrap_or_else(super::DevHealth::pending);
+        let h = app
+            .health
+            .get(i)
+            .cloned()
+            .unwrap_or_else(super::DevHealth::pending);
         let mut spans = vec![
             Span::styled(format!("{} ", ui.arrow()), p.fg(p.accent)),
-            Span::styled(format!("{:<10}", w::clip(&d.name, 10, ui)), p.bold(p.fg)),
+            Span::styled(format!("{:<10}", w::clip(&d.name, 10, theme)), p.bold(p.fg)),
             Span::styled(format!(" {:<5}", crate::virt::kind_label(d)), p.fg(p.dim)),
             Span::styled(format!("{:>9}  ", human_size(d.size_bytes)), p.fg(p.fg)),
         ];
         if app.health_rx.is_some() {
             spans.push(Span::styled(ui.spinner(app.tick), p.fg(p.accent)));
         } else {
-            spans.push(w::status(h.sev, &h.label, p, ui));
+            spans.push(w::status(h.sev, &h.label, theme));
         }
         lines.push(Line::from(spans));
     }
@@ -397,48 +475,70 @@ fn storage_card(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn ram_card(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
-    let inner = w::panel(f, area, "MEMORY BANK", None, p, ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
+    let inner = brand::panel(f, area, "MEMORY BANK", None, theme);
     let mut lines = match &app.ram {
-        Some(r) => ram_vitals(r, p, ui, inner.width),
+        Some(r) => ram_vitals(r, theme, inner.width),
         None => vec![scanning_line(app, "READING MEMORY")],
     };
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(format!("enter {} memory diagnostics", ui.arrow()), p.fg(p.dim))));
-    f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+    lines.push(Line::from(Span::styled(
+        format!("enter {} memory diagnostics", ui.arrow()),
+        p.fg(p.dim),
+    )));
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 
 fn cpu_card(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
-    let inner = w::panel(f, area, "PROCESSOR", None, p, ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
+    let inner = brand::panel(f, area, "PROCESSOR", None, theme);
     let mut lines = match &app.cpu {
-        Some(c) => cpu_vitals(c, p, ui, inner.width, 2),
+        Some(c) => cpu_vitals(c, theme, inner.width, 2),
         None => vec![scanning_line(app, "READING PROCESSOR")],
     };
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(format!("enter {} processor diagnostics", ui.arrow()), p.fg(p.dim))));
+    lines.push(Line::from(Span::styled(
+        format!("enter {} processor diagnostics", ui.arrow()),
+        p.fg(p.dim),
+    )));
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 fn board_card(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
-    let inner = w::panel(f, area, "MOTHERBOARD", None, p, ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
+    let inner = brand::panel(f, area, "MOTHERBOARD", None, theme);
     let mut lines = match &app.board {
-        Some(b) => board_vitals(b, p, ui, inner.width, true),
+        Some(b) => board_vitals(b, theme, inner.width, true),
         None => vec![scanning_line(app, "READING BOARD / BMC")],
     };
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(format!("enter {} board diagnostics", ui.arrow()), p.fg(p.dim))));
-    f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+    lines.push(Line::from(Span::styled(
+        format!("enter {} board diagnostics", ui.arrow()),
+        p.fg(p.dim),
+    )));
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 
 fn exit_card(f: &mut Frame, app: &App, area: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
-    let inner = w::panel(f, area, "SESSION", None, p, ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
+    let inner = brand::panel(f, area, "SESSION", None, theme);
     let lines = vec![
         Line::from(Span::styled("Terminate the dcheck session.", p.fg(p.fg))),
         Line::from(""),
-        Line::from(Span::styled(format!("enter {} exit", ui.arrow()), p.fg(p.dim))),
+        Line::from(Span::styled(
+            format!("enter {} exit", ui.arrow()),
+            p.fg(p.dim),
+        )),
     ];
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
@@ -449,8 +549,8 @@ fn text(s: impl Into<String>, p: &Palette) -> Vec<Span<'static>> {
     vec![Span::styled(s.into(), p.fg(p.fg))]
 }
 
-fn temp_gauge(t: i64, warn: i64, cells: usize, p: &Palette, ui: Ui) -> Line<'static> {
-    temp_gauge_range(t, None, warn, cells, p, ui)
+fn temp_gauge(t: i64, warn: i64, cells: usize, theme: &Theme) -> Line<'static> {
+    temp_gauge_range(t, None, warn, cells, theme)
 }
 
 /// Temperature gauge; `range` = lifetime (min, max) shown next to the value.
@@ -459,22 +559,28 @@ fn temp_gauge_range(
     range: Option<(i64, i64)>,
     warn: i64,
     cells: usize,
-    p: &Palette,
-    ui: Ui,
+    theme: &Theme,
 ) -> Line<'static> {
+    let (p, ui) = (&theme.palette, theme.ui);
     let pct = t as f64 / (warn + 20).max(1) as f64 * 100.0;
     let color = p.level(t as f64, (warn - 10) as f64, warn as f64);
     let value = match range {
         Some((lo, hi)) => format!("{t}{} ({lo}–{hi})", ui.degrees()),
         None => format!("{t}{}", ui.degrees()),
     };
-    w::gauge("TEMP", LW, pct, cells, color, &value, p, ui)
+    w::gauge("TEMP", LW, pct, cells, color, &value, theme)
 }
 
-fn ram_vitals(r: &RamInfo, p: &Palette, ui: Ui, width: u16) -> Vec<Line<'static>> {
+fn ram_vitals(r: &RamInfo, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+    let (p, ui) = (&theme.palette, theme.ui);
     let cells = w::gauge_cells_for(width, LW, VW);
     let (label, sev) = r.verdict();
-    let mut lines = vec![w::field("STATUS", LW - 1, vec![w::badge(sev, label, p, ui)], p)];
+    let mut lines = vec![w::field(
+        "STATUS",
+        LW - 1,
+        vec![w::badge(sev, label, theme)],
+        theme,
+    )];
     let used = r.used_percent();
     lines.push(w::gauge(
         "USED",
@@ -482,9 +588,12 @@ fn ram_vitals(r: &RamInfo, p: &Palette, ui: Ui, width: u16) -> Vec<Line<'static>
         used,
         cells,
         p.level(used, 75.0, 90.0),
-        &format!("{}/{}", human_size_bin(r.used_bytes()), human_size_bin(r.total_bytes)),
-        p,
-        ui,
+        &format!(
+            "{}/{}",
+            human_size_bin(r.used_bytes()),
+            human_size_bin(r.total_bytes)
+        ),
+        theme,
     ));
     if r.swap_total_bytes > 0 {
         let su = r.swap_total_bytes.saturating_sub(r.swap_free_bytes);
@@ -495,27 +604,52 @@ fn ram_vitals(r: &RamInfo, p: &Palette, ui: Ui, width: u16) -> Vec<Line<'static>
             pct,
             cells,
             p.level(pct, 50.0, 80.0),
-            &format!("{}/{}", human_size_bin(su), human_size_bin(r.swap_total_bytes)),
-            p,
-            ui,
+            &format!(
+                "{}/{}",
+                human_size_bin(su),
+                human_size_bin(r.swap_total_bytes)
+            ),
+            theme,
         ));
     } else {
-        lines.push(w::field("SWAP", LW, vec![Span::styled("none", p.fg(p.dim))], p));
+        lines.push(w::field(
+            "SWAP",
+            LW,
+            vec![Span::styled("none", p.fg(p.dim))],
+            theme,
+        ));
     }
     let mut kind = Vec::new();
     if let Some(t) = r.memory_type() {
         kind.push(t);
     }
-    if let Some(s) = r.modules.iter().find_map(|m| m.configured_mts.or(m.speed_mts)) {
+    if let Some(s) = r
+        .modules
+        .iter()
+        .find_map(|m| m.configured_mts.or(m.speed_mts))
+    {
         kind.push(format!("{s} MT/s"));
     }
     if !kind.is_empty() {
-        lines.push(w::field("TYPE", LW, text(kind.join(&format!(" {} ", ui.dot())), p), p));
+        lines.push(w::field(
+            "TYPE",
+            LW,
+            text(kind.join(&format!(" {} ", ui.dot())), p),
+            theme,
+        ));
     }
     let used_all = r.populated();
     let total = (r.slots_total as usize).max(used_all);
     if r.on_package() {
-        lines.push(w::field("LAYOUT", LW, vec![Span::styled("on-package (unified, not replaceable)", p.fg(p.dim))], p));
+        lines.push(w::field(
+            "LAYOUT",
+            LW,
+            vec![Span::styled(
+                "on-package (unified, not replaceable)",
+                p.fg(p.dim),
+            )],
+            theme,
+        ));
     } else if total > 0 {
         let (full, empty) = ui.slot_cells();
         let used = used_all.min(total);
@@ -525,7 +659,11 @@ fn ram_vitals(r: &RamInfo, p: &Palette, ui: Ui, width: u16) -> Vec<Line<'static>
         let sep = if spaced { " " } else { "" };
         let mut spans = Vec::new();
         for i in 0..cap {
-            let (g, c) = if i < used { (full, p.accent) } else { (empty, p.track) };
+            let (g, c) = if i < used {
+                (full, p.accent)
+            } else {
+                (empty, p.track)
+            };
             spans.push(Span::styled(format!("{g}{sep}"), p.bold(c)));
         }
         let listed = if used != r.modules.len() {
@@ -533,8 +671,11 @@ fn ram_vitals(r: &RamInfo, p: &Palette, ui: Ui, width: u16) -> Vec<Line<'static>
         } else {
             String::new()
         };
-        spans.push(Span::styled(format!(" {used}/{total} populated{listed}"), p.fg(p.dim)));
-        lines.push(w::field("SLOTS", LW, spans, p));
+        spans.push(Span::styled(
+            format!(" {used}/{total} populated{listed}"),
+            p.fg(p.dim),
+        ));
+        lines.push(w::field("SLOTS", LW, spans, theme));
     }
     let ecc_color = if r.ecc_uncorrectable > 0 {
         p.bad
@@ -555,24 +696,27 @@ fn ram_vitals(r: &RamInfo, p: &Palette, ui: Ui, width: u16) -> Vec<Line<'static>
             ),
             p.fg(ecc_color),
         )],
-        p,
+        theme,
     ));
     if let Some(t) = r.ram_temp_c {
-        lines.push(temp_gauge(t, crate::config::load().temp_warn_c, cells, p, ui));
+        lines.push(temp_gauge(
+            t,
+            crate::config::load().temp_warn_c,
+            cells,
+            theme,
+        ));
     }
     for n in r.notes() {
-        lines.push(Line::from(Span::styled(format!("{} {n}", ui.bullet()), p.fg(p.dim))));
+        lines.push(Line::from(Span::styled(
+            format!("{} {n}", ui.bullet()),
+            p.fg(p.dim),
+        )));
     }
     lines
 }
 
-fn cpu_vitals(
-    c: &CpuInfo,
-    p: &Palette,
-    ui: Ui,
-    width: u16,
-    grid_rows: usize,
-) -> Vec<Line<'static>> {
+fn cpu_vitals(c: &CpuInfo, theme: &Theme, width: u16, grid_rows: usize) -> Vec<Line<'static>> {
+    let (p, ui) = (&theme.palette, theme.ui);
     let cells = w::gauge_cells_for(width, LW, VW);
     let health = c.health();
     let (label, sev) = (health.label, health.severity);
@@ -582,10 +726,20 @@ fn cpu_vitals(
         .cpu_temp_warn_c
         .or_else(|| hottest.and_then(|s| s.high_c.or(s.crit_c.map(|c| c - 10))))
         .unwrap_or(crate::cpu::DEFAULT_CPU_WARN_C);
-    let mut lines = vec![w::field("STATUS", LW - 1, vec![w::badge(sev, label, p, ui)], p)];
+    let mut lines = vec![w::field(
+        "STATUS",
+        LW - 1,
+        vec![w::badge(sev, label, theme)],
+        theme,
+    )];
     let model = if c.model.is_empty() { "-" } else { &c.model };
     let room = (width as usize).saturating_sub(LW);
-    lines.push(w::field("MODEL", LW, text(w::clip(model, room, ui), p), p));
+    lines.push(w::field(
+        "MODEL",
+        LW,
+        text(w::clip(model, room, theme), p),
+        theme,
+    ));
     lines.push(w::field(
         "TOPOLOGY",
         LW,
@@ -599,14 +753,22 @@ fn cpu_vitals(
             ),
             p,
         ),
-        p,
+        theme,
     ));
     if let Some(l) = c.load1 {
         let pct = l / c.threads.max(1) as f64 * 100.0;
-        lines.push(w::gauge("LOAD", LW, pct, cells, p.level(pct, 70.0, 90.0), &format!("{l:.2} (1m)"), p, ui));
+        lines.push(w::gauge(
+            "LOAD",
+            LW,
+            pct,
+            cells,
+            p.level(pct, 70.0, 90.0),
+            &format!("{l:.2} (1m)"),
+            theme,
+        ));
     }
     if let Some(t) = c.temp_c {
-        let mut g = temp_gauge(t, warn, cells, p, ui);
+        let mut g = temp_gauge(t, warn, cells, theme);
         if let Some(s) = hottest.filter(|_| c.sensors.len() > 1) {
             let short = s.label.replace("Package id ", "socket ");
             g.spans.push(Span::styled(format!(" {short}"), p.fg(p.dim)));
@@ -621,20 +783,37 @@ fn cpu_vitals(
             cells,
             p.accent,
             &format!("{cur:.0}/{max:.0} MHz"),
-            p,
-            ui,
+            theme,
         )),
-        (Some(cur), _) => lines.push(w::field("CLOCK", LW, text(format!("{cur:.0} MHz"), p), p)),
-        (None, Some(max)) => lines.push(w::field("CLOCK", LW, text(format!("max {max:.0} MHz"), p), p)),
+        (Some(cur), _) => lines.push(w::field(
+            "CLOCK",
+            LW,
+            text(format!("{cur:.0} MHz"), p),
+            theme,
+        )),
+        (None, Some(max)) => lines.push(w::field(
+            "CLOCK",
+            LW,
+            text(format!("max {max:.0} MHz"), p),
+            theme,
+        )),
         _ => {}
     }
     if let Some(kb) = c.cache_kb {
-        let cache = if kb >= 1024 { format!("{} MB", kb / 1024) } else { format!("{kb} KB") };
-        lines.push(w::field("CACHE", LW, text(cache, p), p));
+        let cache = if kb >= 1024 {
+            format!("{} MB", kb / 1024)
+        } else {
+            format!("{kb} KB")
+        };
+        lines.push(w::field("CACHE", LW, text(cache, p), theme));
     }
     if c.threads > 0 && grid_rows > 0 {
         let (full, empty) = ui.slot_cells();
-        let busy = c.load1.map(|l| l.round() as usize).unwrap_or(0).min(c.threads as usize);
+        let busy = c
+            .load1
+            .map(|l| l.round() as usize)
+            .unwrap_or(0)
+            .min(c.threads as usize);
         let per_row = ((width as usize).saturating_sub(LW) / 9 * 8).max(8);
         let total = c.threads as usize;
         let shown = total.min(per_row * grid_rows);
@@ -644,49 +823,88 @@ fn cpu_vitals(
                 if i > row * per_row && i % 8 == 0 {
                     spans.push(Span::raw(" "));
                 }
-                let (g, col) = if i < busy { (full, p.warn) } else { (empty, p.accent) };
+                let (g, col) = if i < busy {
+                    (full, p.warn)
+                } else {
+                    (empty, p.accent)
+                };
                 spans.push(Span::styled(g, p.fg(col)));
             }
             if row == 0 && shown < total {
                 spans.push(Span::styled(format!(" +{}", total - shown), p.fg(p.dim)));
             }
-            lines.push(w::field(if row == 0 { "THREADS" } else { "" }, LW, spans, p));
+            lines.push(w::field(
+                if row == 0 { "THREADS" } else { "" },
+                LW,
+                spans,
+                theme,
+            ));
         }
     }
     let issue_color = if sev >= 3 { p.bad } else { p.warn };
     for i in &health.issues {
-        lines.push(Line::from(Span::styled(format!("{} {i}", ui.sym(sev.max(2))), p.fg(issue_color))));
+        lines.push(Line::from(Span::styled(
+            format!("{} {i}", ui.sym(sev.max(2))),
+            p.fg(issue_color),
+        )));
     }
     for n in &health.notes {
-        lines.push(Line::from(Span::styled(format!("{} {n}", ui.bullet()), p.fg(p.dim))));
+        lines.push(Line::from(Span::styled(
+            format!("{} {n}", ui.bullet()),
+            p.fg(p.dim),
+        )));
     }
     lines
 }
 
 fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
-    let (p, ui) = (&app.pal, app.ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
     let Some((s, h)) = &app.report_metrics else {
-        if app.report_dev.and_then(|i| app.devices.get(i)).is_some_and(crate::virt::is_virtual_disk) {
+        if app
+            .report_dev
+            .and_then(|i| app.devices.get(i))
+            .is_some_and(crate::virt::is_virtual_disk)
+        {
             let mut lines = vec![
-                w::field("VERDICT", LW - 1, vec![w::badge(0, "VIRTUAL", p, ui)], p),
+                w::field(
+                    "VERDICT",
+                    LW - 1,
+                    vec![w::badge(0, "VIRTUAL", theme)],
+                    theme,
+                ),
                 Line::from(""),
                 Line::from(Span::styled(crate::virt::DISK_NOTE, p.fg(p.fg))),
             ];
             if let Some(v) = crate::virt::detect() {
-                lines.push(Line::from(Span::styled(format!("{} hypervisor: {}", ui.bullet(), v.label()), p.fg(p.dim))));
+                lines.push(Line::from(Span::styled(
+                    format!("{} hypervisor: {}", ui.bullet(), v.label()),
+                    p.fg(p.dim),
+                )));
             }
             return lines;
         }
         let mut lines = vec![
-            w::field("VERDICT", LW - 1, vec![w::badge(1, "UNKNOWN", p, ui)], p),
+            w::field(
+                "VERDICT",
+                LW - 1,
+                vec![w::badge(1, "UNKNOWN", theme)],
+                theme,
+            ),
             Line::from(""),
             Line::from(Span::styled("SMART telemetry unavailable", p.bold(p.warn))),
         ];
         if let Some(d) = app.report_dev.and_then(|i| app.devices.get(i)) {
             let (why, hint) = crate::report::smart_unavailable(d);
-            lines.push(Line::from(Span::styled(format!("{} {why}", ui.bullet()), p.fg(p.fg))));
+            lines.push(Line::from(Span::styled(
+                format!("{} {why}", ui.bullet()),
+                p.fg(p.fg),
+            )));
             if let Some(h) = hint {
-                lines.push(Line::from(Span::styled(format!("{} {h}", ui.bullet()), p.fg(p.dim))));
+                lines.push(Line::from(Span::styled(
+                    format!("{} {h}", ui.bullet()),
+                    p.fg(p.dim),
+                )));
             }
         }
         return lines;
@@ -694,11 +912,20 @@ fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
     let cells = w::gauge_cells_for(width, LW, VW);
     let sev = h.verdict.severity();
     let mut lines = vec![
-        w::field("VERDICT", LW - 1, vec![w::badge(sev, h.verdict.label(), p, ui)], p),
-        w::field("CONFIDENCE", LW, text(h.confidence.label(), p), p),
+        w::field(
+            "VERDICT",
+            LW - 1,
+            vec![w::badge(sev, h.verdict.label(), theme)],
+            theme,
+        ),
+        w::field("CONFIDENCE", LW, text(h.confidence.label(), p), theme),
     ];
     if let Some(d) = app.report_dev.and_then(|i| app.devices.get(i)) {
-        let model = s.model.clone().or_else(|| d.model.clone()).unwrap_or_default();
+        let model = s
+            .model
+            .clone()
+            .or_else(|| d.model.clone())
+            .unwrap_or_default();
         let serial = s.serial.clone().or_else(|| d.serial.clone());
         let a = crate::authenticity::for_device(d, Some(s), &model, serial.as_deref());
         // Only when it matters: a short panel must keep its alerts visible,
@@ -708,15 +935,15 @@ fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
                 "ORIGIN",
                 LW - 1,
                 vec![
-                    w::badge(a.level.severity(), a.level.label(), p, ui),
+                    w::badge(a.level.severity(), a.level.label(), theme),
                     Span::styled(format!(" {}", a.summary()), p.fg(p.dim)),
                 ],
-                p,
+                theme,
             ));
         }
     }
     if !s.source.is_empty() {
-        lines.push(w::field("SOURCE", LW, text(s.source.clone(), p), p));
+        lines.push(w::field("SOURCE", LW, text(s.source.clone(), p), theme));
     }
     if let Some(age) = app
         .report_dev
@@ -727,12 +954,15 @@ fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
         lines.push(w::field(
             "DATA",
             LW,
-            vec![Span::styled(format!("cached, read {} (r re-reads)", crate::cache::fmt_age(age)), p.fg(p.dim))],
-            p,
+            vec![Span::styled(
+                format!("cached, read {} (r re-reads)", crate::cache::fmt_age(age)),
+                p.fg(p.dim),
+            )],
+            theme,
         ));
     }
     lines.push(Line::from(""));
-    life_gauges(&mut lines, s, h, app.temp_warn, cells, p, ui);
+    life_gauges(&mut lines, s, h, app.temp_warn, cells, theme);
 
     let mut po = Vec::new();
     if let Some(poh) = s.power_on_hours {
@@ -742,28 +972,41 @@ fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
         po.push(format!("{c} cycles"));
     }
     if !po.is_empty() {
-        lines.push(w::field("POWER-ON", LW, text(po.join(&format!(" {} ", ui.dot())), p), p));
+        lines.push(w::field(
+            "POWER-ON",
+            LW,
+            text(po.join(&format!(" {} ", ui.dot())), p),
+            theme,
+        ));
     }
     match s.manufactured {
         Some((y, wk)) => {
             let age = crate::report::age_years(y, wk)
                 .map(|a| format!(" {} {a:.1} y old", ui.dot()))
                 .unwrap_or_default();
-            lines.push(w::field("MADE", LW, text(format!("{y} week {wk}{age}"), p), p));
+            lines.push(w::field(
+                "MADE",
+                LW,
+                text(format!("{y} week {wk}{age}"), p),
+                theme,
+            ));
         }
         None => lines.push(w::field(
             "MADE",
             LW,
             vec![Span::styled("not stored by the drive", p.fg(p.dim))],
-            p,
+            theme,
         )),
     }
     if let Some(poh) = s.power_on_hours {
         lines.push(w::field(
             "IN SERVICE",
             LW,
-            text(format!("{:.1} y powered on @24/7", poh as f64 / (365.0 * 24.0)), p),
-            p,
+            text(
+                format!("{:.1} y powered on @24/7", poh as f64 / (365.0 * 24.0)),
+                p,
+            ),
+            theme,
         ));
     }
     let mut cycles = Vec::new();
@@ -774,39 +1017,66 @@ fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
         cycles.push(format!("load {}/{}", compact(a), compact(r)));
     }
     if !cycles.is_empty() {
-        lines.push(w::field("CYCLES", LW, text(cycles.join(&format!(" {} ", ui.dot())), p), p));
+        lines.push(w::field(
+            "CYCLES",
+            LW,
+            text(cycles.join(&format!(" {} ", ui.dot())), p),
+            theme,
+        ));
     }
-    if let (Some(hours), Some(used), Some(what)) = (h.design_hours, h.design_life_used, h.design_limit) {
+    if let (Some(hours), Some(used), Some(what)) =
+        (h.design_hours, h.design_life_used, h.design_limit)
+    {
         lines.push(w::field(
             "DESIGN",
             LW,
             vec![
-                Span::styled(format!("{:.1} y @24/7 ", hours as f64 / (365.0 * 24.0)), p.fg(p.fg)),
+                Span::styled(
+                    format!("{:.1} y @24/7 ", hours as f64 / (365.0 * 24.0)),
+                    p.fg(p.fg),
+                ),
                 Span::styled(format!("({hours} h, assumed)"), p.fg(p.dim)),
             ],
-            p,
+            theme,
         ));
-        lines.push(w::field("", LW, vec![Span::styled(format!("{used}% used ({what})"), p.fg(p.dim))], p));
+        lines.push(w::field(
+            "",
+            LW,
+            vec![Span::styled(format!("{used}% used ({what})"), p.fg(p.dim))],
+            theme,
+        ));
     }
     let est = match (h.remaining_poh, h.overdue_poh) {
         (Some(0), Some(over)) => vec![Span::styled(
-            format!("0 {} {:.1}y past rated life", ui.dot(), over as f64 / (365.0 * 24.0)),
+            format!(
+                "0 {} {:.1}y past rated life",
+                ui.dot(),
+                over as f64 / (365.0 * 24.0)
+            ),
             p.bold(p.warn),
         )],
         _ => match crate::report::life_left(h) {
-            Some(t) => vec![Span::styled(t.replace("  |  ", &format!(" {} ", ui.dot())), p.fg(p.fg))],
+            Some(t) => vec![Span::styled(
+                t.replace("  |  ", &format!(" {} ", ui.dot())),
+                p.fg(p.fg),
+            )],
             None => vec![Span::styled("unknown", p.fg(p.dim))],
         },
     };
-    lines.push(w::field("EST. LIFE", LW, est, p));
+    lines.push(w::field("EST. LIFE", LW, est, theme));
     if h.design_hours.is_none() {
         if let Some(basis) = h.life_basis {
-            lines.push(w::field("", LW, vec![Span::styled(format!("({basis})"), p.fg(p.dim))], p));
+            lines.push(w::field(
+                "",
+                LW,
+                vec![Span::styled(format!("({basis})"), p.fg(p.dim))],
+                theme,
+            ));
         }
     }
 
     lines.push(Line::from(""));
-    lines.push(w::caption("ALERTS", width, p, ui));
+    lines.push(w::caption("ALERTS", width, theme));
     if h.issues.is_empty() && h.notes.is_empty() {
         lines.push(Line::from(Span::styled(
             format!("{} no anomalies detected", ui.sym(0)),
@@ -821,7 +1091,10 @@ fn report_vitals(app: &App, width: u16) -> Vec<Line<'static>> {
         )));
     }
     for n in &h.notes {
-        lines.push(Line::from(Span::styled(format!("{} {n}", ui.bullet()), p.fg(p.dim))));
+        lines.push(Line::from(Span::styled(
+            format!("{} {n}", ui.bullet()),
+            p.fg(p.dim),
+        )));
     }
     lines
 }
@@ -847,9 +1120,9 @@ fn life_gauges(
     h: &Health,
     warn: i64,
     cells: usize,
-    p: &Palette,
-    ui: Ui,
+    theme: &Theme,
 ) {
+    let p = &theme.palette;
     match h.wear_used_percent.or(h.design_life_used) {
         Some(used) => {
             let left = 100u64.saturating_sub(used) as f64;
@@ -860,13 +1133,26 @@ fn life_gauges(
             } else {
                 p.ok
             };
-            lines.push(w::gauge("LIFE", LW, left, cells, color, &format!("{left:.0}% left"), p, ui));
+            lines.push(w::gauge(
+                "LIFE",
+                LW,
+                left,
+                cells,
+                color,
+                &format!("{left:.0}% left"),
+                theme,
+            ));
         }
-        None => lines.push(w::field("LIFE", LW, vec![Span::styled("n/a", p.fg(p.dim))], p)),
+        None => lines.push(w::field(
+            "LIFE",
+            LW,
+            vec![Span::styled("n/a", p.fg(p.dim))],
+            theme,
+        )),
     }
     if let Some(t) = s.temperature_c {
         let range = s.temp_min_c.zip(s.temp_max_c);
-        lines.push(temp_gauge_range(t, range, warn, cells, p, ui));
+        lines.push(temp_gauge_range(t, range, warn, cells, theme));
     }
     match (h.tbw_bytes, h.rated_tbw_bytes) {
         (Some(tbw), Some(rated)) if rated > 0 => {
@@ -878,11 +1164,10 @@ fn life_gauges(
                 cells,
                 p.level(pct, 70.0, 90.0),
                 &format!("{}/{}", human_size(tbw), human_size(rated)),
-                p,
-                ui,
+                theme,
             ));
         }
-        (Some(tbw), _) => lines.push(w::field("WRITTEN", LW, text(human_size(tbw), p), p)),
+        (Some(tbw), _) => lines.push(w::field("WRITTEN", LW, text(human_size(tbw), p), theme)),
         _ => {}
     }
 }
@@ -899,7 +1184,11 @@ fn colorize_line(line: &str, p: &Palette) -> Line<'static> {
         return Line::from(Span::styled(line.to_string(), p.fg(p.border)));
     }
     let value_color = |v: &str| {
-        if v.contains("FAILED") || v.contains("REPLACE") || v.contains("BACK UP") || v.contains("FAIL") {
+        if v.contains("FAILED")
+            || v.contains("REPLACE")
+            || v.contains("BACK UP")
+            || v.contains("FAIL")
+        {
             p.bad
         } else if v.contains("MONITOR") || v.contains("warn") {
             p.warn
@@ -938,19 +1227,23 @@ fn log_pane(
     loading: bool,
     lines: Vec<String>,
 ) {
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
+    let (p, ui) = (&theme.palette, theme.ui);
     let right = if loading {
-        Line::from(Span::styled(format!(" {} LOADING ", ui.spinner(app.tick)), p.bold(p.accent)))
+        Line::from(Span::styled(
+            format!(" {} LOADING ", ui.spinner(app.tick)),
+            p.bold(p.accent),
+        ))
     } else {
         let rows = wrapped_rows(&lines, area.width.saturating_sub(2));
         let pos = (app.scroll as usize + 1).min(rows.max(1));
         Line::from(Span::styled(format!(" {pos}/{rows} "), p.fg(p.dim)))
     };
-    let inner = w::panel(f, area, title, Some(right), &p, ui);
+    let inner = brand::panel(f, area, title, Some(right), &theme);
     app.view_height = inner.height;
     app.log_rows = wrapped_rows(&lines, inner.width);
     app.scroll = app.scroll.min(app.max_scroll());
-    let body: Vec<Line> = lines.iter().map(|l| colorize_line(l, &p)).collect();
+    let body: Vec<Line> = lines.iter().map(|l| colorize_line(l, p)).collect();
     f.render_widget(
         Paragraph::new(Text::from(body))
             .wrap(Wrap { trim: false })
@@ -962,15 +1255,19 @@ fn log_pane(
 // ─── storage ────────────────────────────────────────────────────────────────
 
 fn storage(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
+    let (p, ui) = (&theme.palette, theme.ui);
     if app.devices.is_empty() {
-        let inner = w::panel(f, area, "STORAGE ARRAY", None, &p, ui);
+        let inner = brand::panel(f, area, "STORAGE ARRAY", None, &theme);
         let msg = vec![
             Line::from(""),
             Line::from(Span::styled("NO BLOCK DEVICES DETECTED", p.bold(p.warn))),
             Line::from(Span::styled("press r to rescan", p.fg(p.dim))),
         ];
-        f.render_widget(Paragraph::new(Text::from(msg)).alignment(Alignment::Center), inner);
+        f.render_widget(
+            Paragraph::new(Text::from(msg)).alignment(Alignment::Center),
+            inner,
+        );
         return;
     }
 
@@ -979,11 +1276,17 @@ fn storage(f: &mut Frame, app: &mut App, area: Rect) {
         Layout::vertical([Constraint::Min(4), Constraint::Length(detail_h)]).areas(area);
 
     let right = if app.health_rx.is_some() {
-        Line::from(Span::styled(format!(" {} SCANNING ", ui.spinner(app.tick)), p.bold(p.accent)))
+        Line::from(Span::styled(
+            format!(" {} SCANNING ", ui.spinner(app.tick)),
+            p.bold(p.accent),
+        ))
     } else {
-        Line::from(Span::styled(format!(" {} UNITS ", app.devices.len()), p.fg(p.dim)))
+        Line::from(Span::styled(
+            format!(" {} UNITS ", app.devices.len()),
+            p.fg(p.dim),
+        ))
     };
-    let inner = w::panel(f, table_area, "STORAGE ARRAY", Some(right), &p, ui);
+    let inner = brand::panel(f, table_area, "STORAGE ARRAY", Some(right), &theme);
 
     let wd = inner.width;
     let show_bus = wd >= 78;
@@ -1023,7 +1326,11 @@ fn storage(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, d)| {
-            let h = app.health.get(i).cloned().unwrap_or_else(super::DevHealth::pending);
+            let h = app
+                .health
+                .get(i)
+                .cloned()
+                .unwrap_or_else(super::DevHealth::pending);
             let mut cells = vec![
                 Cell::from(Span::styled(d.path.clone(), p.bold(p.fg))),
                 Cell::from(Span::styled(crate::virt::kind_label(d), p.fg(p.dim))),
@@ -1033,7 +1340,11 @@ fn storage(f: &mut Frame, app: &mut App, area: Rect) {
             }
             cells.push(Cell::from(d.label()));
             let cap = if d.failure.is_some() && d.size_bytes == 0 {
-                if ui.plain { "-".to_string() } else { "—".to_string() }
+                if ui.plain {
+                    "-".to_string()
+                } else {
+                    "—".to_string()
+                }
             } else {
                 human_size(d.size_bytes)
             };
@@ -1048,7 +1359,8 @@ fn storage(f: &mut Frame, app: &mut App, area: Rect) {
                         } else {
                             p.ok
                         };
-                        let mut g = w::gauge("", 0, l as f64, 8, color, &format!("{l:>3}%"), &p, ui);
+                        let mut g =
+                            w::gauge("", 0, l as f64, 8, color, &format!("{l:>3}%"), &theme);
                         g.spans.remove(0);
                         g
                     }
@@ -1067,7 +1379,7 @@ fn storage(f: &mut Frame, app: &mut App, area: Rect) {
             cells.push(Cell::from(if loading {
                 Span::styled(ui.spinner(app.tick), p.fg(p.accent))
             } else {
-                w::status(h.sev, &h.label, &p, ui)
+                w::status(h.sev, &h.label, &theme)
             }));
             if show_mount {
                 cells.push(Cell::from(Span::styled(mount_summary(d), p.fg(p.dim))));
@@ -1086,26 +1398,38 @@ fn storage(f: &mut Frame, app: &mut App, area: Rect) {
 
     if detail_h > 0 {
         if let Some(d) = app.table.selected().and_then(|i| app.devices.get(i)) {
-            device_detail(f, d, detail_area, &p, ui);
+            device_detail(f, d, detail_area, &theme);
         }
     }
 }
 
-fn device_detail(f: &mut Frame, d: &Device, area: Rect, p: &Palette, ui: Ui) {
+fn device_detail(f: &mut Frame, d: &Device, area: Rect, theme: &Theme) {
+    let (p, ui) = (&theme.palette, theme.ui);
     let title = format!("TARGET {} {}", ui.arrow(), d.path);
-    let inner = w::panel(f, area, &title, None, p, ui);
+    let inner = brand::panel(f, area, &title, None, theme);
     if let Some(reason) = &d.failure {
         let room = inner.width as usize;
         let lines = vec![
             Line::from(Span::styled(
-                w::clip(&format!("SATA port {} {} {reason}", d.name, ui.dot()), room, ui),
+                w::clip(
+                    &format!("SATA port {} {} {reason}", d.name, ui.dot()),
+                    room,
+                    theme,
+                ),
                 p.bold(p.bad),
             )),
             Line::from(Span::styled(
-                w::clip("no block device: the drive never answered — swap cable/port, else replace", room, ui),
+                w::clip(
+                    "no block device: the drive never answered — swap cable/port, else replace",
+                    room,
+                    theme,
+                ),
                 p.fg(p.dim),
             )),
-            Line::from(Span::styled(format!("enter {} details", ui.arrow()), p.fg(p.accent))),
+            Line::from(Span::styled(
+                format!("enter {} details", ui.arrow()),
+                p.fg(p.accent),
+            )),
         ];
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
         return;
@@ -1128,15 +1452,22 @@ fn device_detail(f: &mut Frame, d: &Device, area: Rect, p: &Palette, ui: Ui) {
                 let name = pt.path.rsplit('/').next().unwrap_or(&pt.path);
                 let fs = pt.filesystem.as_deref().unwrap_or("raw");
                 let at = pt.mountpoint.as_deref().unwrap_or("unmounted");
-                format!("{name} {} {fs} {} {at}", human_size(pt.size_bytes), ui.arrow())
+                format!(
+                    "{name} {} {fs} {} {at}",
+                    human_size(pt.size_bytes),
+                    ui.arrow()
+                )
             })
             .collect::<Vec<_>>()
             .join(&dot)
     };
     let room = inner.width as usize;
     let lines = vec![
-        Line::from(Span::styled(w::clip(&ident.join(&dot), room, ui), p.fg(p.fg))),
-        Line::from(Span::styled(w::clip(&parts, room, ui), p.fg(p.dim))),
+        Line::from(Span::styled(
+            w::clip(&ident.join(&dot), room, theme),
+            p.fg(p.fg),
+        )),
+        Line::from(Span::styled(w::clip(&parts, room, theme), p.fg(p.dim))),
         Line::from(Span::styled(
             format!("enter {} full diagnostic report", ui.arrow()),
             p.fg(p.accent),
@@ -1148,7 +1479,8 @@ fn device_detail(f: &mut Frame, d: &Device, area: Rect, p: &Palette, ui: Ui) {
 // ─── report dashboard ───────────────────────────────────────────────────────
 
 fn report_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
+    let ui = theme.ui;
     let wide = area.width >= 100;
     let (vit_area, log_area) = if wide {
         let [a, b] = Layout::horizontal([Constraint::Length(46), Constraint::Min(40)]).areas(area);
@@ -1171,13 +1503,16 @@ fn report_view(f: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or_default();
     let loading = app.report_rx.is_some();
 
-    let inner = w::panel(f, vit_area, "VITALS", None, &p, ui);
+    let inner = brand::panel(f, vit_area, "VITALS", None, &theme);
     let lines = if loading {
         vec![scanning_line(app, "READING SMART TELEMETRY")]
     } else {
         report_vitals(app, inner.width)
     };
-    f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        inner,
+    );
 
     let title = format!("TELEMETRY LOG {} {path}", ui.arrow());
     let lines = app.report_lines.clone();
@@ -1199,32 +1534,49 @@ fn dashboard_split(area: Rect, lines: usize) -> (Rect, Rect) {
 }
 
 fn ram_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
     let loading = app.ram_rx.is_some();
     let lines = match (&app.ram, loading) {
-        (Some(r), _) => ram_vitals(r, &p, ui, area.width.saturating_sub(2)),
+        (Some(r), _) => ram_vitals(r, &theme, area.width.saturating_sub(2)),
         (None, _) => vec![scanning_line(app, "READING MEMORY")],
     };
     let rows = display_rows(&lines, area.width.saturating_sub(2));
     let (top, bottom) = dashboard_split(area, rows);
-    let inner = w::panel(f, top, "MEMORY BANK", None, &p, ui);
-    f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+    let inner = brand::panel(f, top, "MEMORY BANK", None, &theme);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        inner,
+    );
     let log = app.ram_lines.clone();
-    log_pane(f, app, bottom, "MEMORY LOG", loading && app.ram.is_none(), log);
+    log_pane(
+        f,
+        app,
+        bottom,
+        "MEMORY LOG",
+        loading && app.ram.is_none(),
+        log,
+    );
 }
 
 fn cpu_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
     let loading = app.cpu_rx.is_some();
     let lines = match &app.cpu {
-        Some(c) => cpu_vitals(c, &p, ui, area.width.saturating_sub(2), 4),
+        Some(c) => cpu_vitals(c, &theme, area.width.saturating_sub(2), 4),
         None => vec![scanning_line(app, "READING PROCESSOR")],
     };
     let (top, bottom) = dashboard_split(area, lines.len());
-    let inner = w::panel(f, top, "PROCESSOR CORE", None, &p, ui);
+    let inner = brand::panel(f, top, "PROCESSOR CORE", None, &theme);
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
     let log = app.cpu_lines.clone();
-    log_pane(f, app, bottom, "PROCESSOR LOG", loading && app.cpu.is_none(), log);
+    log_pane(
+        f,
+        app,
+        bottom,
+        "PROCESSOR LOG",
+        loading && app.cpu.is_none(),
+        log,
+    );
 }
 
 // ─── recovery ───────────────────────────────────────────────────────────────
@@ -1240,8 +1592,9 @@ fn chance_sev(c: crate::recover::Chance) -> u8 {
 }
 
 /// The sampled disk map, `cols` cells per row, coloured by filesystem.
-fn map_rows(m: &crate::recover::DiskMap, cols: usize, p: &Palette, ui: Ui) -> Vec<Line<'static>> {
+fn map_rows(m: &crate::recover::DiskMap, cols: usize, theme: &Theme) -> Vec<Line<'static>> {
     use crate::recover::Sample;
+    let (p, ui) = (&theme.palette, theme.ui);
     let colors = [p.accent, p.accent2, p.ok, p.warn];
     let mut out = Vec::new();
     for (r, chunk) in m.cells.chunks(cols.max(8)).enumerate() {
@@ -1267,35 +1620,55 @@ fn map_rows(m: &crate::recover::DiskMap, cols: usize, p: &Palette, ui: Ui) -> Ve
 }
 
 fn recover_top(app: &App, width: u16) -> Vec<Line<'static>> {
-    let (p, ui) = (&app.pal, app.ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
     let mut lines = Vec::new();
     let Some(g) = &app.recover else {
         if app.recover_rx.is_some() {
             lines.push(scanning_line(app, "ASSESSING FILESYSTEMS"));
         } else {
-            lines.push(Line::from(Span::styled("assessment unavailable (see the log)", p.fg(p.warn))));
+            lines.push(Line::from(Span::styled(
+                "assessment unavailable (see the log)",
+                p.fg(p.warn),
+            )));
         }
         return lines;
     };
     let colors = [p.accent, p.accent2, p.ok, p.warn];
     for (i, (f, a)) in g.fss.iter().enumerate() {
         let mut spans = vec![
-            Span::styled(format!("{:<LW$}", w::clip(f.device.trim_start_matches("/dev/"), LW - 1, ui)), p.bold(colors[i % colors.len()])),
-            w::badge(chance_sev(a.chance), a.chance.label(), p, ui),
+            Span::styled(
+                format!(
+                    "{:<LW$}",
+                    w::clip(f.device.trim_start_matches("/dev/"), LW - 1, theme)
+                ),
+                p.bold(colors[i % colors.len()]),
+            ),
+            w::badge(chance_sev(a.chance), a.chance.label(), theme),
         ];
         let what = format!(
             " {}{}",
             f.fstype.as_deref().unwrap_or("?"),
-            f.mountpoint.as_deref().map(|m| format!(" on {m}")).unwrap_or_default()
+            f.mountpoint
+                .as_deref()
+                .map(|m| format!(" on {m}"))
+                .unwrap_or_default()
         );
         spans.push(Span::styled(what, p.fg(p.fg)));
         lines.push(Line::from(spans));
         if let Some(r) = a.reasons.first() {
-            lines.push(Line::from(Span::styled(format!("{:LW$}{}", "", w::clip(r, (width as usize).saturating_sub(LW + 1), ui)), p.fg(p.dim))));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{:LW$}{}",
+                    "",
+                    w::clip(r, (width as usize).saturating_sub(LW + 1), theme)
+                ),
+                p.fg(p.dim),
+            )));
         }
     }
     lines.push(Line::from(""));
-    lines.push(w::caption("DISK MAP", width, p, ui));
+    lines.push(w::caption("DISK MAP", width, theme));
     match &app.recover_map {
         None => lines.push(scanning_line(app, "SAMPLING THE DISK")),
         Some(Err(e)) => lines.push(Line::from(Span::styled(format!("  {e}"), p.fg(p.dim)))),
@@ -1303,7 +1676,7 @@ fn recover_top(app: &App, width: u16) -> Vec<Line<'static>> {
             let cols = (width as usize).saturating_sub(11).min(64);
             // Fit the map in at most 16 rows.
             let cols = cols.max(m.cells.len().div_ceil(16));
-            lines.extend(map_rows(m, cols, p, ui));
+            lines.extend(map_rows(m, cols, theme));
             let (full, empty) = if ui.plain { ("#", ".") } else { ("█", "·") };
             lines.push(Line::from(vec![
                 Span::styled(format!("{:>9} ", ""), p.fg(p.dim)),
@@ -1313,9 +1686,18 @@ fn recover_top(app: &App, width: u16) -> Vec<Line<'static>> {
                 Span::styled(" empty: never written or erased by TRIM", p.fg(p.dim)),
             ]));
             for (dev, d, r) in &m.shares {
-                let mut t = format!("{:>9} {} data in {:.0}% of samples", "", dev.trim_start_matches("/dev/"), d * 100.0);
+                let mut t = format!(
+                    "{:>9} {} data in {:.0}% of samples",
+                    "",
+                    dev.trim_start_matches("/dev/"),
+                    d * 100.0
+                );
                 if let Some(r) = r {
-                    t.push_str(&format!(" {} ~{:.0}% of its free space still holds old data", ui.dot(), r * 100.0));
+                    t.push_str(&format!(
+                        " {} ~{:.0}% of its free space still holds old data",
+                        ui.dot(),
+                        r * 100.0
+                    ));
                 }
                 lines.push(Line::from(Span::styled(t, p.fg(p.fg))));
             }
@@ -1325,15 +1707,33 @@ fn recover_top(app: &App, width: u16) -> Vec<Line<'static>> {
 }
 
 fn recover_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
-    let path = app.tool_dev.and_then(|i| app.devices.get(i)).map(|d| d.path.clone()).unwrap_or_default();
+    let theme = app.theme.clone();
+    let ui = theme.ui;
+    let path = app
+        .tool_dev
+        .and_then(|i| app.devices.get(i))
+        .map(|d| d.path.clone())
+        .unwrap_or_default();
     let lines = recover_top(app, area.width.saturating_sub(2));
     let (top, bottom) = dashboard_split(area, display_rows(&lines, area.width.saturating_sub(2)));
-    let inner = w::panel(f, top, &format!("RECOVERY {} {path}", ui.arrow()), None, &p, ui);
+    let inner = brand::panel(
+        f,
+        top,
+        &format!("RECOVERY {} {path}", ui.arrow()),
+        None,
+        &theme,
+    );
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
     let log = app.recover_lines.clone();
     let loading = app.recover.is_none() && app.recover_rx.is_some();
-    log_pane(f, app, bottom, "WHAT TO DO  (read-only: nothing was written)", loading, log);
+    log_pane(
+        f,
+        app,
+        bottom,
+        "WHAT TO DO  (read-only: nothing was written)",
+        loading,
+        log,
+    );
 }
 
 // ─── deleted files ──────────────────────────────────────────────────────────
@@ -1352,15 +1752,21 @@ enum BlockKind {
 
 fn block_rows(app: &App, width: u16, rows: usize) -> Vec<Line<'static>> {
     use crate::undelete::State;
-    let (p, ui) = (&app.pal, app.ui);
-    let Some(scan) = &app.undel else { return Vec::new() };
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
+    let Some(scan) = &app.undel else {
+        return Vec::new();
+    };
     let sel = app.undel_table.selected().and_then(|i| scan.files.get(i));
     // The volume of the selected file, else the first one.
     let Some(m) = sel
         .and_then(|f| scan.maps.iter().find(|m| m.volume == f.volume))
         .or_else(|| scan.maps.first())
     else {
-        return vec![Line::from(Span::styled("  no allocation map for this filesystem", p.fg(p.dim)))];
+        return vec![Line::from(Span::styled(
+            "  no allocation map for this filesystem",
+            p.fg(p.dim),
+        ))];
     };
     let cols = (width as usize).saturating_sub(12).clamp(16, 96);
     let cells = cols * rows;
@@ -1395,11 +1801,18 @@ fn block_rows(app: &App, width: u16, rows: usize) -> Vec<Line<'static>> {
             kind[c] = kind[c].max(k);
         }
     }
-    let (full, half, empty) = if ui.plain { ("#", "+", ".") } else { ("█", "▒", "·") };
+    let (full, half, empty) = if ui.plain {
+        ("#", "+", ".")
+    } else {
+        ("█", "▒", "·")
+    };
     let mut out = Vec::new();
     for r in 0..rows {
         let mut spans = vec![Span::styled(
-            format!("{:>10} ", human_size_bin((r * cols) as u64 * m.size / cells as u64)),
+            format!(
+                "{:>10} ",
+                human_size_bin((r * cols) as u64 * m.size / cells as u64)
+            ),
             p.fg(p.dim),
         )];
         for k in &kind[r * cols..(r + 1) * cols] {
@@ -1416,7 +1829,12 @@ fn block_rows(app: &App, width: u16, rows: usize) -> Vec<Line<'static>> {
         }
         out.push(Line::from(spans));
     }
-    let item = |g: &'static str, st: Style, t: &str| vec![Span::styled(g, st), Span::styled(format!(" {t}  "), p.fg(p.dim))];
+    let item = |g: &'static str, st: Style, t: &str| {
+        vec![
+            Span::styled(g, st),
+            Span::styled(format!(" {t}  "), p.fg(p.dim)),
+        ]
+    };
     let mut legend = vec![Span::raw(format!("{:>10} ", ""))];
     legend.extend(item(full, p.fg(p.border), "in use"));
     legend.extend(item(empty, p.fg(p.track), "free"));
@@ -1431,10 +1849,11 @@ fn block_rows(app: &App, width: u16, rows: usize) -> Vec<Line<'static>> {
 
 fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
     use crate::undelete::State;
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
+    let (p, ui) = (&theme.palette, theme.ui);
     let title = format!("DELETED FILES {} {}", ui.arrow(), app.undel_src);
     let Some(scan) = &app.undel else {
-        let inner = w::panel(f, area, &title, None, &p, ui);
+        let inner = brand::panel(f, area, &title, None, &theme);
         let line = match &app.undel_error {
             Some(e) => Line::from(Span::styled(format!("{} {e}", ui.sym(3)), p.bold(p.warn))),
             None => scanning_line(app, "READING DIRECTORY TABLES (READ-ONLY)"),
@@ -1442,16 +1861,31 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(Paragraph::new(line), inner);
         return;
     };
-    let map_rows = if area.height >= 30 { 8 } else if area.height >= 20 { 4 } else { 2 };
-    let [top, list] = Layout::vertical([Constraint::Length(map_rows as u16 + 5), Constraint::Min(4)]).areas(area);
+    let map_rows = if area.height >= 30 {
+        8
+    } else if area.height >= 20 {
+        4
+    } else {
+        2
+    };
+    let [top, list] =
+        Layout::vertical([Constraint::Length(map_rows as u16 + 5), Constraint::Min(4)]).areas(area);
 
     // Block map + summary.
-    let intact = scan.files.iter().filter(|f| f.state == State::Intact).count();
+    let intact = scan
+        .files
+        .iter()
+        .filter(|f| f.state == State::Intact)
+        .count();
     let right = Line::from(Span::styled(
-        format!(" {} deleted {} {intact} intact ", scan.files.len(), ui.dot()),
+        format!(
+            " {} deleted {} {intact} intact ",
+            scan.files.len(),
+            ui.dot()
+        ),
         p.fg(p.dim),
     ));
-    let inner = w::panel(f, top, "BLOCK MAP", Some(right), &p, ui);
+    let inner = brand::panel(f, top, "BLOCK MAP", Some(right), &theme);
     let mut lines = block_rows(app, inner.width, map_rows);
     if let Some(s) = app.undel_table.selected().and_then(|i| scan.files.get(i)) {
         let place = match &s.data {
@@ -1464,7 +1898,10 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(format!("{:>10} ", ""), p.fg(p.dim)),
             Span::styled(s.path.clone(), p.bold(p.accent2)),
-            Span::styled(format!("  {}  {place}", human_size_bin(s.size)), p.fg(p.dim)),
+            Span::styled(
+                format!("  {}  {place}", human_size_bin(s.size)),
+                p.fg(p.dim),
+            ),
         ]));
     }
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
@@ -1472,10 +1909,20 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
     // File list.
     let marked = app.undel_marked.len();
     let right = Line::from(Span::styled(
-        if marked > 0 { format!(" {marked} marked ") } else { " space marks, w recovers ".into() },
+        if marked > 0 {
+            format!(" {marked} marked ")
+        } else {
+            " space marks, w recovers ".into()
+        },
         p.fg(p.dim),
     ));
-    let inner = w::panel(f, list, "FILES  (read-only scan; recovery writes only to the folder you give)", Some(right), &p, ui);
+    let inner = brand::panel(
+        f,
+        list,
+        "FILES  (read-only scan; recovery writes only to the folder you give)",
+        Some(right),
+        &theme,
+    );
     if scan.files.is_empty() {
         let mut msg: Vec<Line> = crate::undelete::scan_lines(scan)
             .into_iter()
@@ -1483,17 +1930,27 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|l| Line::from(Span::styled(l, p.fg(p.fg))))
             .collect();
         msg.push(Line::from(Span::styled(
-            format!("  Other filesystems: carve from a shell: sudo dcheck undelete {} --carve --to DIR", app.undel_src),
+            format!(
+                "  Other filesystems: carve from a shell: sudo dcheck undelete {} --carve --to DIR",
+                app.undel_src
+            ),
             p.fg(p.dim),
         )));
-        f.render_widget(Paragraph::new(Text::from(msg)).wrap(Wrap { trim: false }), inner);
+        f.render_widget(
+            Paragraph::new(Text::from(msg)).wrap(Wrap { trim: false }),
+            inner,
+        );
     } else {
         let rows: Vec<Row> = scan
             .files
             .iter()
             .enumerate()
             .map(|(i, d)| {
-                let mark = if app.undel_marked.contains(&i) { if ui.plain { "[x]" } else { "[■]" } } else { "[ ]" };
+                let mark = if app.undel_marked.contains(&i) {
+                    if ui.plain { "[x]" } else { "[■]" }
+                } else {
+                    "[ ]"
+                };
                 let sev = match d.state {
                     State::Intact => 0,
                     State::PartlyReused => 2,
@@ -1501,7 +1958,7 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
                 };
                 Row::new(vec![
                     Cell::from(Span::styled(mark, p.bold(p.accent))),
-                    Cell::from(w::status(sev, d.state.label(), &p, ui)),
+                    Cell::from(w::status(sev, d.state.label(), &theme)),
                     Cell::from(Line::from(human_size_bin(d.size)).right_aligned()),
                     Cell::from(Span::styled(d.path.clone(), p.fg(p.fg))),
                 ])
@@ -1509,7 +1966,12 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
             .collect();
         let table = Table::new(
             rows,
-            [Constraint::Length(3), Constraint::Length(16), Constraint::Length(10), Constraint::Min(10)],
+            [
+                Constraint::Length(3),
+                Constraint::Length(16),
+                Constraint::Length(10),
+                Constraint::Min(10),
+            ],
         )
         .header(Row::new(["", "STATE", "SIZE", "PATH"].map(Cell::from)).style(p.bold(p.accent)))
         .column_spacing(1)
@@ -1520,18 +1982,34 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Destination prompt.
     if let Some(input) = &app.undel_prompt {
-        let n = if app.undel_marked.is_empty() { 1 } else { app.undel_marked.len() };
+        let n = if app.undel_marked.is_empty() {
+            1
+        } else {
+            app.undel_marked.len()
+        };
         let r = w::centered(area, 72, 9);
         f.render_widget(Clear, r);
-        let inner = w::panel(f, r, &format!("RECOVER {n} FILE(S) TO"), None, &p, ui);
+        let inner = brand::panel(f, r, &format!("RECOVER {n} FILE(S) TO"), None, &theme);
         let cursor = if app.tick.is_multiple_of(2) { "_" } else { " " };
         let lines = vec![
-            Line::from(Span::styled("Folder on ANOTHER disk (USB drive, network share):", p.fg(p.dim))),
+            Line::from(Span::styled(
+                "Folder on ANOTHER disk (USB drive, network share):",
+                p.fg(p.dim),
+            )),
             Line::from(""),
-            Line::from(vec![Span::styled("> ", p.bold(p.accent2)), Span::styled(format!("{input}{cursor}"), p.bold(p.fg))]),
+            Line::from(vec![
+                Span::styled("> ", p.bold(p.accent2)),
+                Span::styled(format!("{input}{cursor}"), p.bold(p.fg)),
+            ]),
             Line::from(""),
-            Line::from(Span::styled("A folder on the same disk is refused: it could overwrite the files.", p.fg(p.dim))),
-            Line::from(Span::styled("Existing files are never overwritten.  enter writes · esc cancels", p.fg(p.dim))),
+            Line::from(Span::styled(
+                "A folder on the same disk is refused: it could overwrite the files.",
+                p.fg(p.dim),
+            )),
+            Line::from(Span::styled(
+                "Existing files are never overwritten.  enter writes · esc cancels",
+                p.fg(p.dim),
+            )),
         ];
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
     }
@@ -1541,7 +2019,7 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
         let r = w::centered(area, area.width.saturating_sub(8).min(110), h);
         f.render_widget(Clear, r);
         let right = Line::from(Span::styled(" any key closes ", p.fg(p.dim)));
-        let inner = w::panel(f, r, "RECOVERED", Some(right), &p, ui);
+        let inner = brand::panel(f, r, "RECOVERED", Some(right), &theme);
         let lines: Vec<Line> = app
             .undel_log
             .iter()
@@ -1550,21 +2028,32 @@ fn undelete_view(f: &mut Frame, app: &mut App, area: Rect) {
                 Line::from(Span::styled(l.clone(), p.fg(c)))
             })
             .collect();
-        f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+        f.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            inner,
+        );
     }
 }
 
 // ─── capacity test ──────────────────────────────────────────────────────────
 
 fn verify_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
-    let path = app.tool_dev.and_then(|i| app.devices.get(i)).map(|d| d.path.clone()).unwrap_or_default();
+    let theme = app.theme.clone();
+    let (p, ui) = (&theme.palette, theme.ui);
+    let path = app
+        .tool_dev
+        .and_then(|i| app.devices.get(i))
+        .map(|d| d.path.clone())
+        .unwrap_or_default();
     let title = format!("CAPACITY TEST {} {path}", ui.arrow());
     let width = area.width.saturating_sub(2);
     let mut lines: Vec<Line<'static>> = Vec::new();
     match &app.verify {
         VerifyState::Plan { plan: Err(e), .. } => {
-            lines.push(Line::from(Span::styled(format!("{} {e}", ui.sym(3)), p.bold(p.warn))));
+            lines.push(Line::from(Span::styled(
+                format!("{} {e}", ui.sym(3)),
+                p.bold(p.warn),
+            )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "The TUI only runs the safe free-space test. An empty, unmounted drive can be",
@@ -1575,13 +2064,16 @@ fn verify_view(f: &mut Frame, app: &mut App, area: Rect) {
                 p.fg(p.dim),
             )));
         }
-        VerifyState::Plan { plan: Ok(plan), full } => {
+        VerifyState::Plan {
+            plan: Ok(plan),
+            full,
+        } => {
             let total = super::App::verify_total(plan, *full);
             for l in crate::verify::plan_lines(plan, total) {
                 lines.push(Line::from(Span::styled(l, p.fg(p.fg))));
             }
             lines.push(Line::from(""));
-            lines.push(w::caption("SIZE", width, &p, ui));
+            lines.push(w::caption("SIZE", width, &theme));
             let quick = plan.room.min(crate::verify::QUICK);
             let opt = |sel: bool, name: &str, text: String, enabled: bool| {
                 let mark = match (sel, ui.plain) {
@@ -1589,16 +2081,56 @@ fn verify_view(f: &mut Frame, app: &mut App, area: Rect) {
                     (true, true) => "> ",
                     _ => "  ",
                 };
-                let style = if !enabled { p.fg(p.track) } else if sel { p.bold(p.accent) } else { p.fg(p.fg) };
-                Line::from(vec![Span::styled(format!("{mark}{name:<7}"), style), Span::styled(text, if enabled { p.fg(p.dim) } else { p.fg(p.track) })])
+                let style = if !enabled {
+                    p.fg(p.track)
+                } else if sel {
+                    p.bold(p.accent)
+                } else {
+                    p.fg(p.fg)
+                };
+                Line::from(vec![
+                    Span::styled(format!("{mark}{name:<7}"), style),
+                    Span::styled(text, if enabled { p.fg(p.dim) } else { p.fg(p.track) }),
+                ])
             };
             if plan.simulated.is_some() {
-                lines.push(opt(true, "DEMO", format!("simulated drive, {} (nothing is written)", human_size_bin(plan.room)), true));
+                lines.push(opt(
+                    true,
+                    "DEMO",
+                    format!(
+                        "simulated drive, {} (nothing is written)",
+                        human_size_bin(plan.room)
+                    ),
+                    true,
+                ));
             } else {
-                lines.push(opt(!*full, "QUICK", format!("first {} — minutes; proves only that part", human_size_bin(quick)), true));
+                lines.push(opt(
+                    !*full,
+                    "QUICK",
+                    format!(
+                        "first {} — minutes; proves only that part",
+                        human_size_bin(quick)
+                    ),
+                    true,
+                ));
                 match &plan.system {
-                    Some(m) => lines.push(opt(false, "FULL", format!("not offered: system disk ({m} is on it) — use the CLI with --full"), false)),
-                    None => lines.push(opt(*full, "FULL", format!("all {} free — proves the whole capacity; can take hours", human_size_bin(plan.room)), true)),
+                    Some(m) => lines.push(opt(
+                        false,
+                        "FULL",
+                        format!(
+                            "not offered: system disk ({m} is on it) — use the CLI with --full"
+                        ),
+                        false,
+                    )),
+                    None => lines.push(opt(
+                        *full,
+                        "FULL",
+                        format!(
+                            "all {} free — proves the whole capacity; can take hours",
+                            human_size_bin(plan.room)
+                        ),
+                        true,
+                    )),
                 }
             }
             lines.push(Line::from(""));
@@ -1610,27 +2142,77 @@ fn verify_view(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" cancels (nothing written yet)", p.fg(p.dim)),
             ]));
         }
-        VerifyState::Running { phase, done, of, total, started, stopping, plan, .. } => {
+        VerifyState::Running {
+            phase,
+            done,
+            of,
+            total,
+            started,
+            stopping,
+            plan,
+            ..
+        } => {
             let cells = w::gauge_cells_for(width, LW, VW).max(16);
-            let pct = if *of > 0 { *done as f64 * 100.0 / *of as f64 } else { 0.0 };
-            let (wpct, rpct) = if *phase == "writing" { (pct, 0.0) } else { (100.0, pct) };
-            let wval = if *phase == "writing" { format!("{} / {}", human_size_bin(*done), human_size_bin(*total)) } else { "done".into() };
-            let rval = if *phase == "reading" { format!("{} / {}", human_size_bin(*done), human_size_bin(*of)) } else { "waiting".into() };
-            lines.push(w::field("TARGET", LW, text(plan.base.clone(), &p), &p));
+            let pct = if *of > 0 {
+                *done as f64 * 100.0 / *of as f64
+            } else {
+                0.0
+            };
+            let (wpct, rpct) = if *phase == "writing" {
+                (pct, 0.0)
+            } else {
+                (100.0, pct)
+            };
+            let wval = if *phase == "writing" {
+                format!("{} / {}", human_size_bin(*done), human_size_bin(*total))
+            } else {
+                "done".into()
+            };
+            let rval = if *phase == "reading" {
+                format!("{} / {}", human_size_bin(*done), human_size_bin(*of))
+            } else {
+                "waiting".into()
+            };
+            lines.push(w::field("TARGET", LW, text(plan.base.clone(), p), &theme));
             lines.push(Line::from(""));
-            lines.push(w::gauge("WRITE", LW, wpct, cells, p.accent, &wval, &p, ui));
-            lines.push(w::gauge("READ BACK", LW, rpct, cells, p.accent2, &rval, &p, ui));
+            lines.push(w::gauge("WRITE", LW, wpct, cells, p.accent, &wval, &theme));
+            lines.push(w::gauge(
+                "READ BACK",
+                LW,
+                rpct,
+                cells,
+                p.accent2,
+                &rval,
+                &theme,
+            ));
             let secs = started.elapsed().as_secs_f64().max(0.001);
             // Bytes moved so far in both phases, for an overall speed.
-            let moved = if *phase == "writing" { *done } else { *total + *done };
-            lines.push(w::field("SPEED", LW, text(crate::verify::mbps(moved, secs), &p), &p));
+            let moved = if *phase == "writing" {
+                *done
+            } else {
+                *total + *done
+            };
+            lines.push(w::field(
+                "SPEED",
+                LW,
+                text(crate::verify::mbps(moved, secs), p),
+                &theme,
+            ));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("{:LW$}{} {phase} … {:.0} s elapsed", "", ui.spinner(app.tick), secs),
+                format!(
+                    "{:LW$}{} {phase} … {:.0} s elapsed",
+                    "",
+                    ui.spinner(app.tick),
+                    secs
+                ),
                 p.fg(p.dim),
             )));
             if *stopping {
-                lines.push(Line::from(Span::styled("stopping — removing the test files", p.bold(p.warn))));
+                lines.push(Line::from(Span::styled(
+                    "stopping — removing the test files",
+                    p.bold(p.warn),
+                )));
             } else {
                 lines.push(Line::from(Span::styled(
                     "Early checks re-read earlier data after every region: a fake drive fails as soon as the writes pass its real size.",
@@ -1644,32 +2226,49 @@ fn verify_view(f: &mut Frame, app: &mut App, area: Rect) {
                 3 => (4, "FAIL"),
                 _ => (2, "INCOMPLETE"),
             };
-            lines.push(w::field("RESULT", LW - 1, vec![w::badge(sev, label, &p, ui)], &p));
+            lines.push(w::field(
+                "RESULT",
+                LW - 1,
+                vec![w::badge(sev, label, &theme)],
+                &theme,
+            ));
             let meaning = match code {
                 0 => "every block written came back intact",
                 3 => "data did not come back — do not trust this drive",
                 _ => "stopped or failed before a verdict (see the log)",
             };
-            lines.push(Line::from(Span::styled(format!("{:LW$}{meaning}", ""), p.fg(p.dim))));
+            lines.push(Line::from(Span::styled(
+                format!("{:LW$}{meaning}", ""),
+                p.fg(p.dim),
+            )));
         }
         VerifyState::Idle => {}
     }
     if matches!(app.verify, VerifyState::Done { .. }) {
         let (top, bottom) = dashboard_split(area, lines.len());
-        let inner = w::panel(f, top, &title, None, &p, ui);
+        let inner = brand::panel(f, top, &title, None, &theme);
         f.render_widget(Paragraph::new(Text::from(lines)), inner);
         let log = app.verify_lines.clone();
         log_pane(f, app, bottom, "RESULT LOG", false, log);
     } else {
-        let inner = w::panel(f, area, &title, None, &p, ui);
-        f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+        let inner = brand::panel(f, area, &title, None, &theme);
+        f.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            inner,
+        );
     }
 }
 
 // ─── motherboard ────────────────────────────────────────────────────────────
 
-fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, compact: bool) -> Vec<Line<'static>> {
-    use crate::board::{placeholder, Kind};
+fn board_vitals(
+    b: &crate::board::BoardInfo,
+    theme: &Theme,
+    width: u16,
+    compact: bool,
+) -> Vec<Line<'static>> {
+    let (p, ui) = (&theme.palette, theme.ui);
+    use crate::board::{Kind, placeholder};
     use crate::ipmi::Status;
     let mut h = b.health();
     if ui.plain {
@@ -1678,7 +2277,12 @@ fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, co
         }
     }
     let name = |i: &crate::board::Ident| {
-        let v: Vec<String> = [&i.vendor, &i.product, &i.version].into_iter().flatten().filter(|s| !placeholder(s)).cloned().collect();
+        let v: Vec<String> = [&i.vendor, &i.product, &i.version]
+            .into_iter()
+            .flatten()
+            .filter(|s| !placeholder(s))
+            .cloned()
+            .collect();
         if v.is_empty() {
             "unknown".to_string()
         } else {
@@ -1686,9 +2290,14 @@ fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, co
         }
     };
     let mut lines = vec![
-        w::field("VERDICT", LW - 1, vec![w::badge(h.severity, h.label, p, ui)], p),
-        w::field("SYSTEM", LW, text(name(&b.system), p), p),
-        w::field("BOARD", LW, text(name(&b.board), p), p),
+        w::field(
+            "VERDICT",
+            LW - 1,
+            vec![w::badge(h.severity, h.label, theme)],
+            theme,
+        ),
+        w::field("SYSTEM", LW, text(name(&b.system), p), theme),
+        w::field("BOARD", LW, text(name(&b.board), p), theme),
     ];
     let mut bios = format!(
         "{} {}",
@@ -1701,7 +2310,12 @@ fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, co
             bios.push_str(&format!(" ({a:.1} y)"));
         }
     }
-    lines.push(w::field("BIOS", LW, text(bios.trim().to_string(), p), p));
+    lines.push(w::field(
+        "BIOS",
+        LW,
+        text(bios.trim().to_string(), p),
+        theme,
+    ));
     if !compact {
         let mut mode = match b.bios.uefi {
             Some(true) => "UEFI".to_string(),
@@ -1709,18 +2323,50 @@ fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, co
             None => "?".to_string(),
         };
         if let Some(sb) = b.bios.secure_boot {
-            mode.push_str(if sb { " · Secure Boot on" } else { " · Secure Boot off" });
+            mode.push_str(if sb {
+                " · Secure Boot on"
+            } else {
+                " · Secure Boot off"
+            });
         }
-        lines.push(w::field("BOOT", LW, text(if ui.plain { mode.replace('·', "-") } else { mode }, p), p));
+        lines.push(w::field(
+            "BOOT",
+            LW,
+            text(
+                if ui.plain {
+                    mode.replace('·', "-")
+                } else {
+                    mode
+                },
+                p,
+            ),
+            theme,
+        ));
         if let Some(f) = &b.bmc_firmware {
-            lines.push(w::field("BMC", LW, text(format!("IPMI firmware {f}"), p), p));
+            lines.push(w::field(
+                "BMC",
+                LW,
+                text(format!("IPMI firmware {f}"), p),
+                theme,
+            ));
         }
     }
     // Sensors, summarised per kind.
-    let fans: Vec<f64> = b.sensors.iter().filter(|s| s.kind == Kind::Fan).filter_map(|s| s.value).collect();
+    let fans: Vec<f64> = b
+        .sensors
+        .iter()
+        .filter(|s| s.kind == Kind::Fan)
+        .filter_map(|s| s.value)
+        .collect();
     if !fans.is_empty() {
-        let (lo, hi) = fans.iter().fold((f64::MAX, 0f64), |(a, z), v| (a.min(*v), z.max(*v)));
-        let bad = b.sensors.iter().filter(|s| s.kind == Kind::Fan && s.status != Status::Ok).count();
+        let (lo, hi) = fans
+            .iter()
+            .fold((f64::MAX, 0f64), |(a, z), v| (a.min(*v), z.max(*v)));
+        let bad = b
+            .sensors
+            .iter()
+            .filter(|s| s.kind == Kind::Fan && s.status != Status::Ok)
+            .count();
         let color = if bad > 0 { p.warn } else { p.fg };
         lines.push(w::field(
             "FANS",
@@ -1731,19 +2377,41 @@ fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, co
                     fans.len(),
                     if ui.plain { "x" } else { "×" },
                     if ui.plain { "-" } else { "–" },
-                    if bad > 0 { format!(" {} {bad} alarm", ui.dot()) } else { String::new() }
+                    if bad > 0 {
+                        format!(" {} {bad} alarm", ui.dot())
+                    } else {
+                        String::new()
+                    }
                 ),
                 p.fg(color),
             )],
-            p,
+            theme,
         ));
     }
-    if let Some(t) = b.sensors.iter().filter(|s| s.kind == Kind::Temp).filter_map(|s| s.value.map(|v| (v, s))).max_by(|a, b| a.0.total_cmp(&b.0)) {
+    if let Some(t) = b
+        .sensors
+        .iter()
+        .filter(|s| s.kind == Kind::Temp)
+        .filter_map(|s| s.value.map(|v| (v, s)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+    {
         let cells = w::gauge_cells_for(width, LW, VW).min(if compact { 16 } else { 32 });
         let color = p.level(t.0, 70.0, 85.0);
-        lines.push(w::gauge("HOTTEST", LW, t.0, cells, color, &format!("{:.0}{} {}", t.0, ui.degrees(), t.1.name), p, ui));
+        lines.push(w::gauge(
+            "HOTTEST",
+            LW,
+            t.0,
+            cells,
+            color,
+            &format!("{:.0}{} {}", t.0, ui.degrees(), t.1.name),
+            theme,
+        ));
     }
-    let psus: Vec<&crate::board::BoardSensor> = b.sensors.iter().filter(|s| s.kind == Kind::Power && s.state.is_some()).collect();
+    let psus: Vec<&crate::board::BoardSensor> = b
+        .sensors
+        .iter()
+        .filter(|s| s.kind == Kind::Power && s.state.is_some())
+        .collect();
     if !psus.is_empty() {
         let mut spans = Vec::new();
         for s in &psus {
@@ -1752,61 +2420,102 @@ fn board_vitals(b: &crate::board::BoardInfo, p: &Palette, ui: Ui, width: u16, co
                 Status::Warn => 2,
                 Status::Crit => 3,
             };
-            spans.push(w::status(sev, &s.name, p, ui));
+            spans.push(w::status(sev, &s.name, theme));
             spans.push(Span::raw("  "));
         }
-        lines.push(w::field("POWER", LW, spans, p));
+        lines.push(w::field("POWER", LW, spans, theme));
     }
-    if let Some(wt) = b.sensors.iter().find(|s| s.kind == Kind::Power && s.unit == "W").and_then(|s| s.value) {
-        lines.push(w::field("DRAW", LW, text(format!("{wt:.0} W"), p), p));
+    if let Some(wt) = b
+        .sensors
+        .iter()
+        .find(|s| s.kind == Kind::Power && s.unit == "W")
+        .and_then(|s| s.value)
+    {
+        lines.push(w::field("DRAW", LW, text(format!("{wt:.0} W"), p), theme));
     }
     let devs = b.pci.iter().filter(|d| !d.internal()).count();
     lines.push(w::field(
         "DEVICES",
         LW,
-        text(format!("{devs} PCIe {} {} USB{}", ui.dot(), b.usb.len(), if b.events.is_empty() { String::new() } else { format!(" {} {} BMC events", ui.dot(), b.sel_entries) }), p),
-        p,
+        text(
+            format!(
+                "{devs} PCIe {} {} USB{}",
+                ui.dot(),
+                b.usb.len(),
+                if b.events.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {} {} BMC events", ui.dot(), b.sel_entries)
+                }
+            ),
+            p,
+        ),
+        theme,
     ));
     if !compact && (!h.issues.is_empty() || !h.notes.is_empty()) {
         lines.push(Line::from(""));
-        lines.push(w::caption("ALERTS", width, p, ui));
+        lines.push(w::caption("ALERTS", width, theme));
         let color = if h.severity >= 3 { p.bad } else { p.warn };
         for i in &h.issues {
-            lines.push(Line::from(Span::styled(format!("{} {i}", ui.sym(h.severity.max(2))), p.fg(color))));
+            lines.push(Line::from(Span::styled(
+                format!("{} {i}", ui.sym(h.severity.max(2))),
+                p.fg(color),
+            )));
         }
         for n in &h.notes {
-            lines.push(Line::from(Span::styled(format!("{} {n}", ui.bullet()), p.fg(p.dim))));
+            lines.push(Line::from(Span::styled(
+                format!("{} {n}", ui.bullet()),
+                p.fg(p.dim),
+            )));
         }
     } else if compact && !h.issues.is_empty() {
-        lines.push(Line::from(Span::styled(format!("{} {}", ui.sym(h.severity), h.issues[0]), p.fg(if h.severity >= 3 { p.bad } else { p.warn }))));
+        lines.push(Line::from(Span::styled(
+            format!("{} {}", ui.sym(h.severity), h.issues[0]),
+            p.fg(if h.severity >= 3 { p.bad } else { p.warn }),
+        )));
     }
     lines
 }
 
 fn board_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let (p, ui) = (app.pal.clone(), app.ui);
+    let theme = app.theme.clone();
     let loading = app.board_rx.is_some();
     let lines = match &app.board {
-        Some(b) => board_vitals(b, &p, ui, area.width.saturating_sub(2), false),
+        Some(b) => board_vitals(b, &theme, area.width.saturating_sub(2), false),
         None => vec![scanning_line(&*app, "READING BOARD, DEVICES AND BMC")],
     };
     let rows = display_rows(&lines, area.width.saturating_sub(2));
     let (top, bottom) = dashboard_split(area, rows);
-    let inner = w::panel(f, top, "MOTHERBOARD", None, &p, ui);
-    f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }), inner);
+    let inner = brand::panel(f, top, "MOTHERBOARD", None, &theme);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+        inner,
+    );
     let log = app.board_lines.clone();
-    log_pane(f, app, bottom, "BOARD LOG  (sensors, BMC events, PCIe / USB devices)", loading && app.board.is_none(), log);
+    log_pane(
+        f,
+        app,
+        bottom,
+        "BOARD LOG  (sensors, BMC events, PCIe / USB devices)",
+        loading && app.board.is_none(),
+        log,
+    );
 }
 
 // ─── help overlay ───────────────────────────────────────────────────────────
 
 fn help(f: &mut Frame, app: &App, body: Rect) {
-    let (p, ui) = (&app.pal, app.ui);
+    let theme = &app.theme;
+    let (p, ui) = (&theme.palette, theme.ui);
     let r = w::centered(body, 64, 20);
     f.render_widget(Clear, r);
     let right = Line::from(Span::styled(" any key closes ", p.fg(p.dim)));
-    let inner = w::panel(f, r, "COMMAND REFERENCE", Some(right), p, ui);
-    let nav = if ui.plain { "up/dn j/k" } else { "↑ ↓  j k" };
+    let inner = brand::panel(f, r, "COMMAND REFERENCE", Some(right), theme);
+    let nav = if ui.plain {
+        "up/dn j/k"
+    } else {
+        "↑ ↓  j k"
+    };
     let key = |k: &str, d: &str| {
         Line::from(vec![
             Span::styled(format!("  {k:<16}"), p.bold(p.accent)),
@@ -1814,14 +2523,14 @@ fn help(f: &mut Frame, app: &App, body: Rect) {
         ])
     };
     let lines = vec![
-        w::caption("NAVIGATION", inner.width, p, ui),
+        w::caption("NAVIGATION", inner.width, theme),
         key(nav, "move / scroll"),
         key("pgup pgdn space", "page"),
         key("g G  home end", "top / bottom"),
         key("enter", "open"),
         key("esc  b", "back"),
         key("1 2 3 4", "jump to storage / memory / processor / board"),
-        w::caption("ACTIONS", inner.width, p, ui),
+        w::caption("ACTIONS", inner.width, theme),
         key("r", "rescan devices / refresh reading"),
         key("u", "deleted a file? recovery chance + disk map"),
         key("v", "verify the real capacity (test files, asks)"),
@@ -1839,5 +2548,8 @@ fn help(f: &mut Frame, app: &App, body: Rect) {
             p.fg(p.dim),
         )),
     ];
-    f.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), inner);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).style(Style::default()),
+        inner,
+    );
 }

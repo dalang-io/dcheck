@@ -108,10 +108,16 @@ impl SmartData {
         put!(bool: passed, in_smartctl_database, smart_available, trim, write_cache);
         m.insert("source".into(), Json::Str(self.source.clone()));
         if let Some((y, w)) = self.manufactured {
-            m.insert("manufactured".into(), Json::Arr(vec![Json::Num(y as f64), Json::Num(w as f64)]));
+            m.insert(
+                "manufactured".into(),
+                Json::Arr(vec![Json::Num(y as f64), Json::Num(w as f64)]),
+            );
         }
         if let Some(p) = self.phy_errors {
-            m.insert("phy_errors".into(), Json::Arr(p.iter().map(|v| Json::Num(*v as f64)).collect()));
+            m.insert(
+                "phy_errors".into(),
+                Json::Arr(p.iter().map(|v| Json::Num(*v as f64)).collect()),
+            );
         }
         let attrs = self
             .attributes
@@ -159,7 +165,12 @@ impl SmartData {
         }
         if let Some(p) = j.get("phy_errors").and_then(Json::as_array) {
             if p.len() == 4 {
-                s.phy_errors = Some([p[0].as_u64()?, p[1].as_u64()?, p[2].as_u64()?, p[3].as_u64()?]);
+                s.phy_errors = Some([
+                    p[0].as_u64()?,
+                    p[1].as_u64()?,
+                    p[2].as_u64()?,
+                    p[3].as_u64()?,
+                ]);
             }
         }
         for a in j.get("attributes").and_then(Json::as_array).unwrap_or(&[]) {
@@ -192,15 +203,52 @@ impl SmartData {
             };
         }
         fill!(
-            passed, model, serial, firmware, rotation_rate, form_factor, sata_version,
-            interface_speed, temperature_c, power_on_hours, power_cycles, lba_written,
-            lba_read, capacity_bytes, logical_block_size, reallocated, pending,
-            uncorrectable, crc_errors, life_percent, in_smartctl_database, smart_available,
-            media_errors, available_spare, available_spare_threshold, warning_temp_time,
-            critical_temp_time, nvme_errors, manufactured, rated_start_stop, load_unload,
-            rated_load_unload, non_medium_errors, trip_temp_c, last_self_test, phy_errors,
-            power_on_resets, temp_min_c, temp_max_c, temp_rated_max_c, hardware_resets,
-            error_log_count, trim, write_cache, wwn, pci_vendor,
+            passed,
+            model,
+            serial,
+            firmware,
+            rotation_rate,
+            form_factor,
+            sata_version,
+            interface_speed,
+            temperature_c,
+            power_on_hours,
+            power_cycles,
+            lba_written,
+            lba_read,
+            capacity_bytes,
+            logical_block_size,
+            reallocated,
+            pending,
+            uncorrectable,
+            crc_errors,
+            life_percent,
+            in_smartctl_database,
+            smart_available,
+            media_errors,
+            available_spare,
+            available_spare_threshold,
+            warning_temp_time,
+            critical_temp_time,
+            nvme_errors,
+            manufactured,
+            rated_start_stop,
+            load_unload,
+            rated_load_unload,
+            non_medium_errors,
+            trip_temp_c,
+            last_self_test,
+            phy_errors,
+            power_on_resets,
+            temp_min_c,
+            temp_max_c,
+            temp_rated_max_c,
+            hardware_resets,
+            error_log_count,
+            trim,
+            write_cache,
+            wwn,
+            pci_vendor,
         );
         if self.attributes.is_empty() {
             self.attributes = other.attributes.clone();
@@ -211,7 +259,8 @@ impl SmartData {
     }
 
     pub fn bytes_written(&self) -> Option<u64> {
-        self.lba_written.map(|l| l.saturating_mul(self.block_size()))
+        self.lba_written
+            .map(|l| l.saturating_mul(self.block_size()))
     }
 
     pub fn bytes_read(&self) -> Option<u64> {
@@ -348,9 +397,7 @@ pub(crate) fn smartctl_installed() -> bool {
 
 /// The pure half of `smartctl_installed`, for tests.
 fn smartctl_in_path(path: Option<&std::ffi::OsStr>) -> bool {
-    path.is_some_and(|paths| {
-        std::env::split_paths(paths).any(|p| p.join("smartctl").is_file())
-    })
+    path.is_some_and(|paths| std::env::split_paths(paths).any(|p| p.join("smartctl").is_file()))
 }
 
 fn run_smartctl(device: &str, dtype: Option<&str>) -> Option<SmartData> {
@@ -413,7 +460,12 @@ fn parse_wwn(j: &Json) -> Option<String> {
         let naa = w.get("naa").and_then(Json::as_u64)?;
         let oui = w.get("oui").and_then(Json::as_u64)?;
         let id = w.get("id").and_then(Json::as_u64)?;
-        return Some(format!("{:x}{:06x}{:09x}", naa & 0xf, oui & 0xff_ffff, id & 0xf_ffff_ffff));
+        return Some(format!(
+            "{:x}{:06x}{:09x}",
+            naa & 0xf,
+            oui & 0xff_ffff,
+            id & 0xf_ffff_ffff
+        ));
     }
     let lu = j.get("logical_unit_id").and_then(Json::as_str)?;
     let hex = lu.trim().trim_start_matches("0x").to_ascii_lowercase();
@@ -434,7 +486,10 @@ fn parse_smart(j: &Json) -> SmartData {
     s.sata_version = str_at(j, &["sata_version", "string"]);
     s.in_smartctl_database = j.get("in_smartctl_database").and_then(Json::as_bool);
     s.wwn = parse_wwn(j);
-    s.pci_vendor = j.get("nvme_pci_vendor").and_then(|v| v.get("id")).and_then(Json::as_u64);
+    s.pci_vendor = j
+        .get("nvme_pci_vendor")
+        .and_then(|v| v.get("id"))
+        .and_then(Json::as_u64);
     s.smart_available = j
         .get("smart_support")
         .and_then(|v| v.get("available"))
@@ -515,7 +570,11 @@ fn parse_smart(j: &Json) -> SmartData {
                 Some(231) | Some(233) => s.life_percent = value,
                 // Samsung Wear_Leveling_Count / Micron Percent_Lifetime_Remain
                 // (normalized, 100 = new) when 231/233 are absent.
-                Some(177) | Some(202) if s.life_percent.is_none() && value.is_some_and(|v| v <= 100) => s.life_percent = value,
+                Some(177) | Some(202)
+                    if s.life_percent.is_none() && value.is_some_and(|v| v <= 100) =>
+                {
+                    s.life_percent = value
+                }
                 Some(241) => s.lba_written = raw,
                 Some(242) => s.lba_read = raw,
                 _ => {}
@@ -576,9 +635,7 @@ fn parse_smart(j: &Json) -> SmartData {
         }
         s.media_errors = nvme.get("media_errors").and_then(Json::as_u64);
         s.available_spare = nvme.get("available_spare").and_then(Json::as_u64);
-        s.available_spare_threshold = nvme
-            .get("available_spare_threshold")
-            .and_then(Json::as_u64);
+        s.available_spare_threshold = nvme.get("available_spare_threshold").and_then(Json::as_u64);
         s.warning_temp_time = nvme.get("warning_temp_time").and_then(Json::as_u64);
         s.critical_temp_time = nvme.get("critical_comp_time").and_then(Json::as_u64);
         s.nvme_errors = nvme.get("num_err_log_entries").and_then(Json::as_u64);
@@ -638,8 +695,12 @@ fn parse_ata_extras(j: &Json, s: &mut SmartData) {
         .and_then(Json::as_array)
     {
         for page in pages {
-            let Some(num) = page.get("number").and_then(Json::as_u64) else { continue };
-            let Some(table) = page.get("table").and_then(Json::as_array) else { continue };
+            let Some(num) = page.get("number").and_then(Json::as_u64) else {
+                continue;
+            };
+            let Some(table) = page.get("table").and_then(Json::as_array) else {
+                continue;
+            };
             for e in table {
                 let valid = e
                     .get("flags")
@@ -648,10 +709,13 @@ fn parse_ata_extras(j: &Json, s: &mut SmartData) {
                     .unwrap_or(false);
                 let off = e.get("offset").and_then(Json::as_u64);
                 // smartctl prints signed temperatures as negative numbers.
-                let val = e
-                    .get("value")
-                    .and_then(|v| v.as_f64())
-                    .map(|v| if v < 0.0 { (v as i64 as u8) as u64 } else { v as u64 });
+                let val = e.get("value").and_then(|v| v.as_f64()).map(|v| {
+                    if v < 0.0 {
+                        (v as i64 as u8) as u64
+                    } else {
+                        v as u64
+                    }
+                });
                 if let (true, Some(off), Some(val)) = (valid, off, val) {
                     apply_device_stat(s, num as u8, off as u16, val);
                 }
@@ -666,13 +730,18 @@ fn parse_ata_extras(j: &Json, s: &mut SmartData) {
             s.temp_max_c = t.get("lifetime_max").and_then(Json::as_i64);
         }
         if s.temp_rated_max_c.is_none() {
-            s.temp_rated_max_c = t.get("op_limit_max").and_then(Json::as_i64).filter(|v| *v > 0);
+            s.temp_rated_max_c = t
+                .get("op_limit_max")
+                .and_then(Json::as_i64)
+                .filter(|v| *v > 0);
         }
     }
     if let Some(log) = j.get("ata_smart_error_log") {
-        s.error_log_count = ["extended", "summary"]
-            .iter()
-            .find_map(|k| log.get(k).and_then(|v| v.get("count")).and_then(Json::as_u64));
+        s.error_log_count = ["extended", "summary"].iter().find_map(|k| {
+            log.get(k)
+                .and_then(|v| v.get("count"))
+                .and_then(Json::as_u64)
+        });
     }
     if let Some(log) = j.get("ata_smart_self_test_log") {
         let latest = ["standard", "extended"].iter().find_map(|k| {
@@ -692,15 +761,22 @@ fn parse_ata_extras(j: &Json, s: &mut SmartData) {
             s.last_self_test = Some(format!("{kind}: {}{at}", status.to_ascii_lowercase()));
         }
     }
-    s.trim = j.get("trim").and_then(|v| v.get("supported")).and_then(Json::as_bool);
-    s.write_cache = j.get("write_cache").and_then(|v| v.get("enabled")).and_then(Json::as_bool);
+    s.trim = j
+        .get("trim")
+        .and_then(|v| v.get("supported"))
+        .and_then(Json::as_bool);
+    s.write_cache = j
+        .get("write_cache")
+        .and_then(|v| v.get("enabled"))
+        .and_then(Json::as_bool);
 }
 
 /// SCSI/SAS sections of `smartctl -x -j`.
 fn parse_scsi(j: &Json, s: &mut SmartData) {
     let num = |v: Option<&Json>| -> Option<f64> {
         let v = v?;
-        v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse().ok()))
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|t| t.trim().parse().ok()))
     };
     if let Some(ss) = j.get("scsi_start_stop_cycle_counter") {
         let year = num(ss.get("year_of_manufacture")).map(|v| v as u16);
@@ -714,12 +790,16 @@ fn parse_scsi(j: &Json, s: &mut SmartData) {
             .get("specified_cycle_count_over_device_lifetime")
             .and_then(Json::as_u64);
         if s.power_cycles.is_none() {
-            s.power_cycles = ss.get("accumulated_start_stop_cycles").and_then(Json::as_u64);
+            s.power_cycles = ss
+                .get("accumulated_start_stop_cycles")
+                .and_then(Json::as_u64);
         }
         s.rated_load_unload = ss
             .get("specified_load_unload_count_over_device_lifetime")
             .and_then(Json::as_u64);
-        s.load_unload = ss.get("accumulated_load_unload_cycles").and_then(Json::as_u64);
+        s.load_unload = ss
+            .get("accumulated_load_unload_cycles")
+            .and_then(Json::as_u64);
     }
     if let Some(g) = j.get("scsi_grown_defect_list").and_then(Json::as_u64) {
         s.reallocated = Some(g);
@@ -755,9 +835,13 @@ fn parse_scsi(j: &Json, s: &mut SmartData) {
     let mut phy = [0u64; 4];
     let mut any_phy = false;
     for port in 0..8 {
-        let Some(p) = j.get(&format!("scsi_sas_port_{port}")) else { break };
+        let Some(p) = j.get(&format!("scsi_sas_port_{port}")) else {
+            break;
+        };
         for n in 0..8 {
-            let Some(ph) = p.get(&format!("phy_{n}")) else { break };
+            let Some(ph) = p.get(&format!("phy_{n}")) else {
+                break;
+            };
             if s.interface_speed.is_none() {
                 if let Some(rate) = str_at(ph, &["negotiated_logical_link_rate"]) {
                     // "phy enabled; 6 Gbps" -> "6 Gbps"
@@ -841,7 +925,8 @@ mod tests {
             include_str!("../testdata/smart-sata-sample.json"),
         ] {
             let s = parse_smart(&Json::parse(text).unwrap());
-            let back = SmartData::from_json(&Json::parse(&s.to_json().to_string()).unwrap()).unwrap();
+            let back =
+                SmartData::from_json(&Json::parse(&s.to_json().to_string()).unwrap()).unwrap();
             assert_eq!(format!("{s:?}"), format!("{back:?}"));
         }
     }
@@ -855,8 +940,15 @@ mod tests {
         assert_eq!(s.power_on_resets, Some(32));
         // Device statistics: 4,016,839,893 sectors written, ~2.06 TB.
         assert_eq!(s.bytes_written().map(|b| b / 1_000_000_000), Some(2056));
-        assert_eq!(s.life_percent, Some(98), "standard 2% used wins over attr 233 (1%)");
-        assert_eq!((s.temp_min_c, s.temp_max_c, s.temp_rated_max_c), (Some(22), Some(39), Some(70)));
+        assert_eq!(
+            s.life_percent,
+            Some(98),
+            "standard 2% used wins over attr 233 (1%)"
+        );
+        assert_eq!(
+            (s.temp_min_c, s.temp_max_c, s.temp_rated_max_c),
+            (Some(22), Some(39), Some(70))
+        );
         assert_eq!(s.hardware_resets, Some(7));
         assert_eq!(s.crc_errors, Some(0));
         assert_eq!(s.error_log_count, Some(0));
@@ -892,7 +984,12 @@ mod tests {
         assert_eq!(s.bytes_written().map(|b| b / 1_000_000_000), Some(58649));
         assert_eq!(s.interface_speed.as_deref(), Some("6 Gbps"));
         assert_eq!(s.phy_errors, Some([724, 715, 181, 4]));
-        assert!(s.last_self_test.as_deref().unwrap().starts_with("Foreground short: completed"));
+        assert!(
+            s.last_self_test
+                .as_deref()
+                .unwrap()
+                .starts_with("Foreground short: completed")
+        );
     }
 
     #[test]
